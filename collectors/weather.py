@@ -184,7 +184,7 @@ def collect_wind_forecast(location_name: str) -> dict:
 
 
 def collect_all_weather() -> str:
-    """모든 지역의 날씨 정보를 수집하여 텍스트로 반환합니다."""
+    """모든 지역의 날씨 정보를 수집하여 텍스트형 리포트로 반환합니다."""
     from config import Config
     
     text = ""
@@ -192,41 +192,49 @@ def collect_all_weather() -> str:
         n = collect_naver_weather(loc["query"])
         w = collect_wind_forecast(loc["name"])
         
-        text += f"📍 **{loc['name']}**\n"
+        text += f"📍 **{loc['name']} 날씨 리포트**\n"
         
-        if "error" not in n:
-            curr = n.get('current_temp', 'N/A').replace("현재 온도", "").strip()
-            text += f"🌡️ 현재: **{curr}** ({n.get('weather_desc', '-')})\n"
-            
-            # 미세먼지 정리
-            dust_raw = n.get('dust', 'N/A')
-            unique_dust = []
-            seen = set()
-            for d in [p.strip() for p in dust_raw.split(",")]:
-                if d and d not in seen and ":" in d:
-                    # '미세먼지: 좋음' -> '미세 좋음'
-                    unique_dust.append(d.replace("미세먼지", "미세").replace("초미세먼지", "초미세"))
-                    seen.add(d)
-            if unique_dust:
-                text += f"😷 대기: {', '.join(unique_dust[:2])}\n"
+        # 1. 최고/최저 및 현재 (기상모델 데이터 우선)
+        f3 = w.get("forecast_3d", [])
+        if f3:
+            today = f3[0]
+            text += f"🌡️ **기온**: {today['min']}° ~ {today['max']}° (현재 {n.get('current_temp', 'N/A').replace('현재 온도', '').strip()})\n"
         
-        if "error" not in w:
-            # 08-23시 정보를 오전/오후/저녁으로 분리
-            hourly_raw = w.get('hourly_active', '')
-            if hourly_raw:
-                parts = hourly_raw.split(" | ")
-                morning = [p for p in parts if p.startswith(("8시", "9시", "10시", "11시"))]
-                afternoon = [p for p in parts if p.startswith(("12시", "13시", "14시", "15시", "16시", "17시"))]
-                evening = [p for p in parts if p.startswith(("18시", "19시", "20시", "21시", "22시", "23시"))]
-                
-                text += f"🌅 오전: {' '.join(morning)}\n"
-                text += f"☀️ 오후: {' '.join(afternoon)}\n"
-                text += f"🌙 저녁: {' '.join(evening)}\n"
+        # 2. 미세먼지
+        dust_raw = n.get('dust', 'N/A')
+        unique_dust = []
+        seen = set()
+        for d in [p.strip() for p in dust_raw.split(",")]:
+            if d and d not in seen and ":" in d:
+                unique_dust.append(d.replace("미세먼지", "미세").replace("초미세먼지", "초미세"))
+                seen.add(d)
+        if unique_dust:
+            text += f"😷 **대기**: {', '.join(unique_dust[:2])}\n"
             
-            f3 = w.get("forecast_3d", [])
-            if f3:
-                today = f3[0]
-                text += f"📊 예보: {today['min']}~{today['max']}°C (강수 {today['rain_prob']})\n"
+        # 3. 시간대별 요약 계산 (오전/오후/저녁)
+        hourly_raw = w.get('hourly_active', '')
+        if hourly_raw:
+            parts = hourly_raw.split(" | ")
+            
+            def get_stats(target_hours):
+                items = [p for p in parts if p.split("시")[0] in target_hours]
+                if not items: return None
+                # "8시(16.0°/구름)" -> 16.0 추출
+                temps = [float(p.split("(")[1].split("°")[0]) for p in items]
+                conds = [p.split("/")[1].replace(")", "") for p in items]
+                avg_temp = sum(temps) / len(temps)
+                # 가장 많이 등장한 날씨 상태
+                main_cond = max(set(conds), key=conds.count)
+                return {"avg": round(avg_temp, 1), "cond": main_cond}
+
+            morning = get_stats(["8", "9", "10", "11"])
+            afternoon = get_stats(["12", "13", "14", "15", "16", "17"])
+            evening = get_stats(["18", "19", "20", "21", "22", "23"])
+
+            text += "📊 **시간대별 요약**\n"
+            if morning: text += f"└ 🌅 오전: 평균 **{morning['avg']}°** ({morning['cond']})\n"
+            if afternoon: text += f"└ ☀️ 오후: 평균 **{afternoon['avg']}°** ({afternoon['cond']})\n"
+            if evening: text += f"└ 🌙 저녁: 평균 **{evening['avg']}°** ({evening['cond']})\n"
         
         text += "\n"
 
