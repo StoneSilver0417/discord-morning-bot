@@ -28,7 +28,7 @@ def search_naver_news(keyword: str, count: int = 5) -> list:
         for item in news_items:
             title = item.get_text(strip=True)
             link = item.get("href", "")
-            if title and len(title) > 15: # Headlines are usually substantial
+            if title:
                 articles.append({
                     "keyword": keyword,
                     "title": title,
@@ -57,7 +57,7 @@ def collect_all_civil_service() -> str:
     seen_titles = set()
 
     for keyword in Config.CIVIL_SERVICE_KEYWORDS:
-        news = search_naver_news(keyword, count=3)
+        news = search_naver_news(keyword, count=5)
         for item in news:
             title = item["title"]
             if title not in seen_titles:
