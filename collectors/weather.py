@@ -124,7 +124,8 @@ def collect_wind_forecast(location_name: str) -> dict:
             f"&daily=weather_code,temperature_2m_max,temperature_2m_min,"
             f"precipitation_sum,precipitation_probability_max,uv_index_max,"
             f"wind_speed_10m_max"
-            f"&timezone=Asia/Seoul&forecast_days=3"
+            f"&hourly=temperature_2m,weather_code"
+            f"&timezone=Asia/Seoul&forecast_days=1"
         )
 
         resp = requests.get(url, timeout=10)
@@ -155,6 +156,23 @@ def collect_wind_forecast(location_name: str) -> dict:
                     "uv": uv[i] if i < len(uv) else "",
                 })
             data["forecast_3d"] = forecast_3d
+
+        hourly = result.get("hourly", {})
+        if hourly:
+            times = hourly.get("time", [])
+            temps = hourly.get("temperature_2m", [])
+            codes = hourly.get("weather_code", [])
+            
+            active_hours = []
+            for i in range(len(times)):
+                # ISO 형식 시간에서 시간 추출 (예: 2026-05-13T08:00)
+                hour_str = times[i].split("T")[-1].split(":")[0]
+                hour = int(hour_str)
+                if 8 <= hour <= 23:
+                    # 기상 코드 단순화
+                    cond = "맑음" if codes[i] <= 1 else "구름" if codes[i] <= 3 else "비/눈"
+                    active_hours.append(f"{hour}시({temps[i]}°/{cond})")
+            data["hourly_active"] = " | ".join(active_hours)
 
         logger.info(f"[Open-Meteo] {location_name} 보조 날씨 수집 완료")
 
