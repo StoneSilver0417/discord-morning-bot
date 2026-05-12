@@ -31,6 +31,9 @@ jobs:
 
       - name: Run Morning Briefing
         env:
-          DISCORD_WEBHOOK_MAIN: ${{ secrets.DISCORD_WEBHOOK_MAIN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DISCORD_WEBHOOK_WEATHER: ${{ secrets.DISCORD_WEBHOOK_WEATHER }}
+          DISCORD_WEBHOOK_STOCKS: ${{ secrets.DISCORD_WEBHOOK_STOCKS }}
+          DISCORD_WEBHOOK_IT_NEWS: ${{ secrets.DISCORD_WEBHOOK_IT_NEWS }}
+          DISCORD_WEBHOOK_CIVIL_SERVICE: ${{ secrets.DISCORD_WEBHOOK_CIVIL_SERVICE }}
         run: python main.py
