@@ -73,15 +73,14 @@ def collect_all_it_news() -> str:
 
     all_articles = rss_articles + hn_articles
 
-    # 요약 실패 시를 대비해 전체 기사 중 상위 10개만 텍스트로 만듦
+    # 요약 실패 시를 대비해 전체 기사 중 상위 10개만 텍스트로 만듦 (링크 위주)
     display_articles = all_articles[:10]
     
     text = f"[IT 뉴스 수집 결과 - 총 {len(all_articles)}건 중 상위 10개]\n\n"
     for i, art in enumerate(display_articles, 1):
         text += (
             f"{i}. **{art['title']}** ({art['source']})\n"
-            f"🔗 {art['link']}\n"
-            f"📝 {art['summary']}...\n\n"
+            f"🔗 {art['link']}\n\n"
         )
-
+    
     return text
