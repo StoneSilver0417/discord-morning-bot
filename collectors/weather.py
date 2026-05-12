@@ -184,48 +184,38 @@ def collect_wind_forecast(location_name: str) -> dict:
 
 
 def collect_all_weather() -> str:
-    """모든 지역의 날씨 데이터를 수집하여 텍스트로 반환합니다."""
-    all_data = []
-
+    """모든 지역의 날씨 정보를 수집하여 텍스트로 반환합니다."""
+    from config import Config
+    
+    text = ""
     for loc in Config.WEATHER_LOCATIONS:
-        naver = collect_naver_weather(loc["query"])
-        wind = collect_wind_forecast(loc["name"])
+        n_weather = collect_naver_weather(loc["query"])
+        w_forecast = collect_wind_forecast(loc["name"])
+        
+        text += f"=== {loc['name']} ===\n"
+        
+        if "error" not in n_weather:
+            text += f"• 현재: {n_weather.get('current_temp', 'N/A')} ({n_weather.get('weather_desc', '-')})\n"
+            # 미세먼지 중복 제거
+            dust_raw = n_weather.get('dust', 'N/A')
+            dust_parts = [d.strip() for d in dust_raw.split(",")]
+            unique_dust = []
+            seen = set()
+            for d in dust_parts:
+                if d and d not in seen:
+                    unique_dust.append(d)
+                    seen.add(d)
+            text += f"• 대기: {', '.join(unique_dust)}\n"
+        
+        if "error" not in w_forecast:
+            # 활동 시간대 (08~23시) 정보 추가
+            text += f"• 오늘(08-23시): {w_forecast.get('hourly_active', 'N/A')}\n"
+            
+            f3 = w_forecast.get("forecast_3d", [])
+            if f3:
+                today = f3[0]
+                text += f"• 예보: {today['min']}~{today['max']}°C (강수 {today['rain_prob']})\n"
+        
+        text += "\n"
 
-        text = f"\n=== {loc['name']} ===\n"
-
-        # 네이버 데이터
-        text += f"[네이버 날씨]\n"
-        text += f"현재 기온: {naver.get('current_temp', 'N/A')}\n"
-        text += f"체감 온도: {naver.get('feels_like', 'N/A')}\n"
-        text += f"날씨 상태: {naver.get('status', 'N/A')}\n"
-        text += f"최저/최고: {naver.get('min_max', 'N/A')}\n"
-        text += f"미세먼지: {naver.get('dust', 'N/A')}\n"
-
-        if naver.get("rain_probability"):
-            text += f"강수확률: {', '.join(naver['rain_probability'])}\n"
-        if naver.get("hourly"):
-            text += f"시간별: {' | '.join(naver['hourly'][:6])}\n"
-
-        # GFS/ECMWF 기상모델 데이터 (Windy가 사용하는 것과 동일 소스)
-        text += f"\n[바람/기압 정보 (기상모델 데이터)]\n"
-        text += f"풍속: {wind.get('wind_speed', 'N/A')}\n"
-        text += f"풍향: {wind.get('wind_direction', 'N/A')}\n"
-        text += f"기압: {wind.get('pressure', 'N/A')}\n"
-        text += f"습도: {wind.get('humidity', 'N/A')}\n"
-
-        if wind.get("forecast_3d"):
-            text += "\n[3일 예보]\n"
-            for f in wind["forecast_3d"]:
-                text += (
-                    f"  {f['date']}: {f['min']}~{f['max']}°C, "
-                    f"강수확률 {f['rain_prob']}, UV {f['uv']}\n"
-                )
-
-        if naver.get("weekly"):
-            text += "\n[주간 날씨]\n"
-            for w in naver["weekly"][:5]:
-                text += f"  {w}\n"
-
-        all_data.append(text)
-
-    return "\n".join(all_data)
+    return text
