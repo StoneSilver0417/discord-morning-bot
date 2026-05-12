@@ -14,14 +14,19 @@ def collect_rss_feeds() -> list:
     for feed_info in Config.IT_NEWS_FEEDS:
         try:
             feed = feedparser.parse(feed_info["url"])
-            for entry in feed.entries[:7]:
+            for entry in feed.entries[:5]:
+                # HTML 태그 제거
+                summary_raw = entry.get("summary", "")
+                from bs4 import BeautifulSoup
+                summary_clean = BeautifulSoup(summary_raw, "html.parser").get_text(strip=True)
+                
                 articles.append({
                     "source": feed_info["name"],
                     "title": entry.get("title", "").strip(),
                     "link": entry.get("link", ""),
-                    "summary": entry.get("summary", "")[:200].strip(),
+                    "summary": summary_clean[:200],
                 })
-            logger.info(f"[RSS] {feed_info['name']}: {min(7, len(feed.entries))}건 수집")
+            logger.info(f"[RSS] {feed_info['name']}: {min(5, len(feed.entries))}건 수집")
         except Exception as e:
             logger.warning(f"[RSS] {feed_info['name']} 실패: {e}")
 
@@ -68,12 +73,15 @@ def collect_all_it_news() -> str:
 
     all_articles = rss_articles + hn_articles
 
-    text = f"[IT 뉴스 수집 결과 - 총 {len(all_articles)}건]\n\n"
-    for i, art in enumerate(all_articles, 1):
+    # 요약 실패 시를 대비해 전체 기사 중 상위 10개만 텍스트로 만듦
+    display_articles = all_articles[:10]
+    
+    text = f"[IT 뉴스 수집 결과 - 총 {len(all_articles)}건 중 상위 10개]\n\n"
+    for i, art in enumerate(display_articles, 1):
         text += (
-            f"{i}. [{art['source']}] {art['title']}\n"
-            f"   링크: {art['link']}\n"
-            f"   요약: {art['summary']}\n\n"
+            f"{i}. **{art['title']}** ({art['source']})\n"
+            f"🔗 {art['link']}\n"
+            f"📝 {art['summary']}...\n\n"
         )
 
     return text
