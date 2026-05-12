@@ -64,7 +64,7 @@ def collect_all_civil_service() -> str:
                 all_articles.append(item)
                 seen_titles.add(title)
     
-    # 요약 실패 시를 대비해 상위 10개만 텍스트로 변환
+    # 요약 실패 시를 대비해 상위 10개만 텍스트로 변환 (링크 위주)
     display_articles = all_articles[:10]
     
     text = f"[공무원 관련 뉴스 - 총 {len(all_articles)}건 중 상위 10개]\n\n"
@@ -73,8 +73,5 @@ def collect_all_civil_service() -> str:
             f"{i}. **{art['title']}**\n"
             f"🔗 {art['link']}\n\n"
         )
-        if art.get("summary"):
-            text += f"   내용: {art['summary']}\n"
-        text += "\n"
     
     return text
