@@ -52,26 +52,29 @@ def search_naver_news(keyword: str, count: int = 5) -> list:
 
 
 def collect_all_civil_service() -> str:
-    """모든 공무원 관련 뉴스를 수집하여 텍스트로 반환합니다."""
+    """모든 키워드에 대해 공무원 뉴스를 수집하여 텍스트로 반환합니다."""
     all_articles = []
     seen_titles = set()
 
     for keyword in Config.CIVIL_SERVICE_KEYWORDS:
-        articles = search_naver_news(keyword, count=5)
-        for art in articles:
-            # 중복 제거
-            if art["title"] not in seen_titles:
-                seen_titles.add(art["title"])
-                all_articles.append(art)
-
-    text = f"[공무원 관련 뉴스 - 총 {len(all_articles)}건]\n\n"
-    for i, art in enumerate(all_articles, 1):
+        news = search_naver_news(keyword, count=3)
+        for item in news:
+            title = item["title"]
+            if title not in seen_titles:
+                all_articles.append(item)
+                seen_titles.add(title)
+    
+    # 요약 실패 시를 대비해 상위 10개만 텍스트로 변환
+    display_articles = all_articles[:10]
+    
+    text = f"[공무원 관련 뉴스 - 총 {len(all_articles)}건 중 상위 10개]\n\n"
+    for i, art in enumerate(display_articles, 1):
         text += (
-            f"{i}. [검색어: {art['keyword']}] {art['title']}\n"
-            f"   링크: {art['link']}\n"
+            f"{i}. **{art['title']}**\n"
+            f"🔗 {art['link']}\n\n"
         )
         if art.get("summary"):
             text += f"   내용: {art['summary']}\n"
         text += "\n"
-
+    
     return text

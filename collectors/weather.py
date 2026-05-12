@@ -189,32 +189,44 @@ def collect_all_weather() -> str:
     
     text = ""
     for loc in Config.WEATHER_LOCATIONS:
-        n_weather = collect_naver_weather(loc["query"])
-        w_forecast = collect_wind_forecast(loc["name"])
+        n = collect_naver_weather(loc["query"])
+        w = collect_wind_forecast(loc["name"])
         
-        text += f"=== {loc['name']} ===\n"
+        text += f"📍 **{loc['name']}**\n"
         
-        if "error" not in n_weather:
-            text += f"• 현재: {n_weather.get('current_temp', 'N/A')} ({n_weather.get('weather_desc', '-')})\n"
-            # 미세먼지 중복 제거
-            dust_raw = n_weather.get('dust', 'N/A')
-            dust_parts = [d.strip() for d in dust_raw.split(",")]
+        if "error" not in n:
+            curr = n.get('current_temp', 'N/A').replace("현재 온도", "").strip()
+            text += f"🌡️ 현재: **{curr}** ({n.get('weather_desc', '-')})\n"
+            
+            # 미세먼지 정리
+            dust_raw = n.get('dust', 'N/A')
             unique_dust = []
             seen = set()
-            for d in dust_parts:
-                if d and d not in seen:
-                    unique_dust.append(d)
+            for d in [p.strip() for p in dust_raw.split(",")]:
+                if d and d not in seen and ":" in d:
+                    # '미세먼지: 좋음' -> '미세 좋음'
+                    unique_dust.append(d.replace("미세먼지", "미세").replace("초미세먼지", "초미세"))
                     seen.add(d)
-            text += f"• 대기: {', '.join(unique_dust)}\n"
+            if unique_dust:
+                text += f"😷 대기: {', '.join(unique_dust[:2])}\n"
         
-        if "error" not in w_forecast:
-            # 활동 시간대 (08~23시) 정보 추가
-            text += f"• 오늘(08-23시): {w_forecast.get('hourly_active', 'N/A')}\n"
+        if "error" not in w:
+            # 08-23시 정보를 오전/오후/저녁으로 분리
+            hourly_raw = w.get('hourly_active', '')
+            if hourly_raw:
+                parts = hourly_raw.split(" | ")
+                morning = [p for p in parts if p.startswith(("8시", "9시", "10시", "11시"))]
+                afternoon = [p for p in parts if p.startswith(("12시", "13시", "14시", "15시", "16시", "17시"))]
+                evening = [p for p in parts if p.startswith(("18시", "19시", "20시", "21시", "22시", "23시"))]
+                
+                text += f"🌅 오전: {' '.join(morning)}\n"
+                text += f"☀️ 오후: {' '.join(afternoon)}\n"
+                text += f"🌙 저녁: {' '.join(evening)}\n"
             
-            f3 = w_forecast.get("forecast_3d", [])
+            f3 = w.get("forecast_3d", [])
             if f3:
                 today = f3[0]
-                text += f"• 예보: {today['min']}~{today['max']}°C (강수 {today['rain_prob']})\n"
+                text += f"📊 예보: {today['min']}~{today['max']}°C (강수 {today['rain_prob']})\n"
         
         text += "\n"
 
