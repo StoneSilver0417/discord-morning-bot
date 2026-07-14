@@ -115,6 +115,9 @@ def collect_wind_forecast(location_name: str) -> dict:
 
     coord = coords.get(location_name, coords["경산 중방동"])
 
+    from utils.time_utils import get_kst_now
+    today_str = get_kst_now().strftime("%Y-%m-%d")
+
     try:
         url = (
             f"https://api.open-meteo.com/v1/forecast"
@@ -125,7 +128,8 @@ def collect_wind_forecast(location_name: str) -> dict:
             f"precipitation_sum,precipitation_probability_max,uv_index_max,"
             f"wind_speed_10m_max"
             f"&hourly=temperature_2m,weather_code"
-            f"&timezone=Asia/Seoul&forecast_days=1"
+            f"&timezone=Asia/Seoul"
+            f"&start_date={today_str}&end_date={today_str}"
         )
 
         resp = requests.get(url, timeout=10)

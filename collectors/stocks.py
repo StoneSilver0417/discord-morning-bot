@@ -48,9 +48,10 @@ def collect_korean_market() -> str:
 
     try:
         import FinanceDataReader as fdr
-        from datetime import datetime, timedelta
+        from utils.time_utils import get_kst_now
+        from datetime import timedelta
 
-        end = datetime.now()
+        end = get_kst_now()
         start = end - timedelta(days=7)
         start_str = start.strftime("%Y-%m-%d")
 

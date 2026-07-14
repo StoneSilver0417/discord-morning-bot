@@ -4,7 +4,6 @@ GitHub Actions cron 또는 로컬에서 실행하여
 날씨/주식/IT뉴스/공무원 정보를 수집 → Gemini로 가공 → Discord Webhook 전송
 """
 import time
-from datetime import datetime
 
 from config import Config
 from collectors.weather import collect_all_weather
@@ -13,6 +12,7 @@ from collectors.it_news import collect_all_it_news
 from collectors.civil_service import collect_all_civil_service
 from processors.gemini_processor import process_with_gemini, add_windy_links
 from formatters.discord_formatter import create_embed, send_webhook
+from utils.time_utils import get_kst_today_str
 from utils.logger import setup_logger
 
 logger = setup_logger("main")
@@ -20,7 +20,7 @@ logger = setup_logger("main")
 
 def run_briefing():
     """전체 모닝 브리핑을 실행합니다."""
-    today = datetime.now().strftime("%Y.%m.%d (%a)")
+    today = get_kst_today_str()
     logger.info(f"=== 모닝 브리핑 시작: {today} ===")
 
     # 웹훅 설정 확인 (최소 하나는 있어야 함)
