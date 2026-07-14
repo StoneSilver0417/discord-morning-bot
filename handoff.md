@@ -10,11 +10,12 @@
 
 - GitHub Actions의 UTC 시스템 시간과 무관하게 브리핑 날짜, 주식 기준 시각, Open-Meteo 조회 날짜를 KST로 계산하도록 수정하고 경계 시각을 검증함
 - 멀티 AI 도구 공통 규칙과 로컬 설정을 저장소에 도입함
+- `Morning Briefing` 워크플로우가 `disabled_manually` 상태였던 것을 발견해 `gh workflow enable`로 재활성화함 (2026-07-14)
 
 ## 알려진 이슈
 
 - `test_collectors.py`는 외부 서비스 응답 오류를 출력만 하고 종료 코드를 실패로 반환하지 않아 자동 회귀 판정에는 한계가 있음
-- 현재 작업 환경에는 Python 실행 파일이 없어 수집기 회귀 테스트를 실행하지 못함
+- Python 설치 및 의존성 설치 완료, `test_collectors.py` 4개 수집기(날씨/주식/IT뉴스/공무원뉴스) 전부 통과 확인함 (2026-07-14)
 
 ## 다음 TODO
 
