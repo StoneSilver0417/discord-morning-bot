@@ -74,6 +74,7 @@ def collect_all_civil_service() -> str:
     for i, art in enumerate(display_articles, 1):
         text += (
             f"{i}. **{art['title']}**\n"
+            f"설명: {art.get('summary') or '기사 설명 없음'}\n"
             f"🔗 {art['link']}\n\n"
         )
     

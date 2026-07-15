@@ -44,6 +44,38 @@ class RegressionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             collect_all_civil_service()
 
+    @patch(
+        "collectors.it_news.collect_hackernews",
+        return_value=[
+            {
+                "source": "HN",
+                "title": "테스트 기사",
+                "link": "https://example.com/news",
+                "summary": "기사 핵심 설명",
+            }
+        ],
+    )
+    @patch("collectors.it_news.collect_rss_feeds", return_value=[])
+    def test_it_news_includes_summary_for_one_line_generation(self, _rss, _hn):
+        result = collect_all_it_news()
+        self.assertIn("설명: 기사 핵심 설명", result)
+        self.assertIn("https://example.com/news", result)
+
+    @patch(
+        "collectors.civil_service.search_naver_news",
+        return_value=[
+            {
+                "title": "공무원 테스트 기사",
+                "link": "https://example.com/civil",
+                "summary": "공무원에게 미치는 영향",
+            }
+        ],
+    )
+    def test_civil_news_includes_summary_for_one_line_generation(self, _search):
+        result = collect_all_civil_service()
+        self.assertIn("설명: 공무원에게 미치는 영향", result)
+        self.assertIn("https://example.com/civil", result)
+
     def test_empty_input_is_not_sent_to_gemini(self):
         with self.assertRaises(ValueError):
             process_with_gemini("it_news", "  ")
