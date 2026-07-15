@@ -2,6 +2,11 @@
 
 ## 2026-07-15
 
+### 테스트 발송 및 503 폴백
+- 수동 Actions 실행 `29380696218`에서 IT·공무원 Gemini 무료 할당량 20회 소진을 확인하고 두 카테고리의 원문 전체 전송 성공 검증
+- 날씨 Gemini가 `503 UNAVAILABLE/high demand`를 반환해 전체 작업 종료 코드가 1이 된 문제 확인
+- 503 서버 과부하·일시 장애도 수집 원문 전체로 폴백하도록 보완, 회귀 테스트 15개 통과
+
 ### Gemini 응답 잘림 방지
 - Discord 메시지가 아니라 Gemini 응답 자체가 IT 96자, 공무원 127자로 중단된 사실을 사진과 Actions 로그로 확인
 - 지원 종료된 `google-generativeai`를 공식 `google-genai` SDK로 이전

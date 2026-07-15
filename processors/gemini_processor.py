@@ -69,6 +69,18 @@ def _is_quota_exhausted(error: Exception) -> bool:
     return any(marker in error_text for marker in quota_markers)
 
 
+def _is_transient_error(error: Exception) -> bool:
+    """재시도 가능한 Gemini 서버 과부하·일시 장애인지 확인합니다."""
+    error_text = f"{type(error).__name__} {error}".lower()
+    transient_markers = (
+        "503",
+        "unavailable",
+        "high demand",
+        "temporarily unavailable",
+    )
+    return any(marker in error_text for marker in transient_markers)
+
+
 def _is_complete_response(response) -> bool:
     """Gemini 응답이 토큰 제한 등으로 중단되지 않고 정상 완료됐는지 확인합니다."""
     candidates = getattr(response, "candidates", None) or []
@@ -133,6 +145,11 @@ def process_with_gemini(category: str, raw_data: str) -> str:
         if _is_quota_exhausted(e):
             logger.warning(
                 f"[{category}] Gemini 할당량 소진 - 수집한 원문 전체를 전송합니다."
+            )
+            return raw_data
+        if _is_transient_error(e):
+            logger.warning(
+                f"[{category}] Gemini 일시 장애 - 수집한 원문 전체를 전송합니다."
             )
             return raw_data
         raise RuntimeError(f"[{category}] Gemini 가공 실패") from e

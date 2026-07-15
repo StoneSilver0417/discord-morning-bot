@@ -100,6 +100,16 @@ class RegressionTests(unittest.TestCase):
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
+    def test_gemini_service_unavailable_returns_full_raw_data(self, mocked_client):
+        raw_weather = "완전한 원문 날씨 데이터"
+        mocked_client.return_value.models.generate_content.side_effect = RuntimeError(
+            "503 UNAVAILABLE: model is experiencing high demand"
+        )
+
+        self.assertEqual(raw_weather, process_with_gemini("weather", raw_weather))
+
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.Client")
     def test_incomplete_gemini_response_returns_full_raw_news(self, mocked_client):
         raw_news = "완전한 원문 뉴스 목록"
         response = Mock()
