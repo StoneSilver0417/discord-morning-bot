@@ -55,6 +55,16 @@ class RegressionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             process_with_gemini("it_news", "뉴스 원문")
 
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.GenerativeModel")
+    def test_gemini_quota_exhaustion_returns_full_raw_news(self, mocked_model):
+        raw_news = "뉴스 목록\n" + "A" * 5000
+        mocked_model.return_value.generate_content.side_effect = RuntimeError(
+            "429 RESOURCE_EXHAUSTED: quota exceeded"
+        )
+
+        self.assertEqual(raw_news, process_with_gemini("it_news", raw_news))
+
     def test_long_discord_description_is_split_without_loss(self):
         content = "A" * 4096 + "\n" + "B" * 1000
         embeds = create_embeds("it_news", "뉴스", content)

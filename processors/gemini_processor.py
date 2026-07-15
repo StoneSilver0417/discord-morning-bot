@@ -49,6 +49,19 @@ SYSTEM_PROMPTS = {
 }
 
 
+def _is_quota_exhausted(error: Exception) -> bool:
+    """Gemini 할당량 소진(HTTP 429/RESOURCE_EXHAUSTED) 오류인지 확인합니다."""
+    error_text = f"{type(error).__name__} {error}".lower()
+    quota_markers = (
+        "resourceexhausted",
+        "resource_exhausted",
+        "quota exceeded",
+        "quota_exceeded",
+        "429",
+    )
+    return any(marker in error_text for marker in quota_markers)
+
+
 def process_with_gemini(category: str, raw_data: str) -> str:
     """Gemini를 사용하여 원시 데이터를 가공합니다."""
     if not raw_data or not raw_data.strip():
@@ -76,6 +89,11 @@ def process_with_gemini(category: str, raw_data: str) -> str:
 
     except Exception as e:
         logger.error(f"[{category}] Gemini 에러: {e}")
+        if _is_quota_exhausted(e):
+            logger.warning(
+                f"[{category}] Gemini 할당량 소진 - 수집한 원문 전체를 전송합니다."
+            )
+            return raw_data
         raise RuntimeError(f"[{category}] Gemini 가공 실패") from e
 
 
