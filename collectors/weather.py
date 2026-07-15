@@ -161,6 +161,12 @@ def collect_wind_forecast(location_name: str) -> dict:
                 })
             data["forecast_3d"] = forecast_3d
 
+        dates = daily.get("time", []) if daily else []
+        if not dates or dates[0] != today_str:
+            raise ValueError(
+                f"Open-Meteo 예보 날짜 불일치: 요청={today_str}, 응답={dates[:1]}"
+            )
+
         hourly = result.get("hourly", {})
         if hourly:
             times = hourly.get("time", [])
@@ -195,6 +201,11 @@ def collect_all_weather() -> str:
     for loc in Config.WEATHER_LOCATIONS:
         n = collect_naver_weather(loc["query"])
         w = collect_wind_forecast(loc["name"])
+
+        if "error" in w or not w.get("forecast_3d"):
+            raise RuntimeError(
+                f"{loc['name']} 오늘 예보 수집 실패: {w.get('error', '오늘 예보 없음')}"
+            )
         
         text += f"📍 **{loc['name']} 날씨 리포트**\n"
         

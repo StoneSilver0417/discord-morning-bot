@@ -51,6 +51,8 @@ SYSTEM_PROMPTS = {
 
 def process_with_gemini(category: str, raw_data: str) -> str:
     """Gemini를 사용하여 원시 데이터를 가공합니다."""
+    if not raw_data or not raw_data.strip():
+        raise ValueError(f"[{category}] Gemini에 전달할 수집 데이터가 비어 있습니다.")
     if not Config.GEMINI_API_KEY:
         logger.warning("Gemini API 키 미설정 - 원본 데이터 반환")
         return raw_data
@@ -67,12 +69,14 @@ def process_with_gemini(category: str, raw_data: str) -> str:
             ),
         )
         result = response.text.strip()
+        if not result:
+            raise RuntimeError("Gemini 응답이 비어 있습니다.")
         logger.info(f"[{category}] Gemini 가공 완료 ({len(result)}자)")
         return result
 
     except Exception as e:
         logger.error(f"[{category}] Gemini 에러: {e}")
-        return f"(LLM 요약 실패 - 원본 요약)\n{raw_data[:1000]}"
+        raise RuntimeError(f"[{category}] Gemini 가공 실패") from e
 
 
 def add_windy_links(text: str) -> str:

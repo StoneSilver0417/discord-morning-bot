@@ -2,20 +2,23 @@
 
 ## 현재 상태
 
-- **버전**: 운영 중 (GitHub Actions 매일 아침 7시 자동 실행)
-- **빌드/배포 상태**: GitHub Actions `morning_briefing.yml` (워크플로우명 `Morning Briefing`) — `active` 상태 (2026-07-14 재활성화)
-- **실행 방법**: 로컬은 `python main.py` (`.env` 필요)
+- **버전**: 2026-07-15 운영 장애 수정 작업 트리(미커밋·미푸시)
+- **빌드/배포 상태**: 로컬 `master`는 `origin/master`보다 기존 4커밋 앞섬. 2026-07-14 KST 날짜 수정도 원격에 미배포 상태
+- **실행 방법**: 로컬 `python main.py`; GitHub Actions `Morning Briefing`은 매일 22:00 UTC(07:00 KST) 예약
 
 ## 최근 작업
 
-1. GitHub Actions의 UTC 시스템 시간과 무관하게 브리핑 날짜·주식 기준 시각·Open-Meteo 조회 날짜를 KST로 계산하도록 수정, 로컬에 Python/의존성 설치 후 `test_collectors.py`로 4개 수집기(날씨/주식/IT뉴스/공무원뉴스) 전량 통과 검증함 (2026-07-14, 커밋 c8c2dcf)
-2. `Morning Briefing` 워크플로우가 `disabled_manually` 상태였던 것을 발견해 `gh workflow enable`로 재활성화함 (2026-07-14)
+1. 2026-07-15 장애를 증상별 조사: 원격 브랜치에는 UTC 날짜 코드가 남아 있고, Discord 4,096자 절단·수집 빈 결과 허용·웹훅 실패 성공 위장 경로를 확인
+2. 오늘 예보 날짜 검증, 빈 뉴스 실패 처리, Gemini 오류/빈 입력 성공 위장 제거, Discord embed 무손실 분할·개별 전송, 전송/수집 실패 시 프로세스 비정상 종료 및 회귀 테스트 추가
 
 ## 알려진 이슈
 
-- `test_collectors.py`는 외부 서비스 응답 오류를 출력만 하고 종료 코드를 실패로 반환하지 않아 자동 회귀 판정에는 한계가 있음
+- 현재 샌드박스가 GitHub CLI 사용자 설정 파일 접근을 거부하고 공개 API 조회도 되지 않아 2026-07-15 Actions 실행 기록/로그는 확인하지 못함
+- 현재 세션에는 Python 실행 파일이 PATH와 문서상 설치 경로에 없어 신규 회귀 테스트/구문 검사를 실제 실행하지 못함(`git diff --check`만 통과)
+- GitHub 예약 실행은 정확히 07:00 도착을 보장하지 않으므로 실행 시작·종료 시각은 Actions 로그로 별도 확인 필요
 
 ## 다음 TODO
 
-1. [ ] 날짜 경계 검증을 자동화된 단위 테스트로 편입
-2. [ ] 수집기 테스트가 수집 실패 시 비정상 종료하도록 개선
+1. [ ] Python 3.12 환경에서 `python -m unittest discover -s tests -v` 실행
+2. [ ] 권한 있는 환경에서 `gh run list/view --log`로 2026-07-15 실행 여부·실패 단계·시각 확인
+3. [ ] 검증 후 기존 미푸시 4커밋과 이번 변경을 의도적으로 커밋·푸시하고 `workflow_dispatch`로 웹훅을 대체/비활성화한 안전한 검증 수행

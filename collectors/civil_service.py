@@ -63,6 +63,9 @@ def collect_all_civil_service() -> str:
             if title not in seen_titles:
                 all_articles.append(item)
                 seen_titles.add(title)
+
+    if not all_articles:
+        raise RuntimeError("모든 공무원 뉴스 검색 결과가 비어 있습니다.")
     
     # 요약 실패 시를 대비해 상위 10개만 텍스트로 변환 (링크 위주)
     display_articles = all_articles[:10]

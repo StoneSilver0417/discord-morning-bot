@@ -73,6 +73,9 @@ def collect_all_it_news() -> str:
 
     all_articles = rss_articles + hn_articles
 
+    if not all_articles:
+        raise RuntimeError("모든 IT 뉴스 소스에서 수집 결과가 비어 있습니다.")
+
     # 요약 실패 시를 대비해 전체 기사 중 상위 10개만 텍스트로 만듦 (링크 위주)
     display_articles = all_articles[:10]
     

@@ -40,6 +40,34 @@ def create_embed(category: str, title: str, description: str, fields: list = Non
     return embed
 
 
+def create_embeds(category: str, title: str, description: str) -> list:
+    """긴 설명을 Discord embed 제한에 맞춰 내용 손실 없이 나눕니다."""
+    if not description:
+        return [create_embed(category, title, "")]
+
+    chunks = []
+    remaining = description
+    while remaining:
+        if len(remaining) <= 4096:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind("\n", 0, 4097)
+        if split_at <= 0:
+            split_at = 4096
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:]
+
+    total = len(chunks)
+    return [
+        create_embed(
+            category,
+            title if total == 1 else f"{title} ({index}/{total})",
+            chunk,
+        )
+        for index, chunk in enumerate(chunks, 1)
+    ]
+
+
 def send_webhook(webhook_url: str, content: str = None, embeds: list = None, username: str = "모닝브리핑 봇") -> bool:
     """Discord Webhook으로 메시지를 전송합니다."""
     if not webhook_url:
@@ -67,10 +95,9 @@ def send_webhook(webhook_url: str, content: str = None, embeds: list = None, use
 
 
 def send_multiple_embeds(webhook_url: str, embeds: list, username: str = "모닝브리핑 봇") -> bool:
-    """10개 초과 embed를 여러 번에 나눠 전송합니다."""
+    """Discord의 메시지당 embed 전체 텍스트 제한을 피해 하나씩 전송합니다."""
     success = True
-    for i in range(0, len(embeds), 10):
-        chunk = embeds[i:i + 10]
-        if not send_webhook(webhook_url, embeds=chunk, username=username):
+    for embed in embeds:
+        if not send_webhook(webhook_url, embeds=[embed], username=username):
             success = False
     return success
