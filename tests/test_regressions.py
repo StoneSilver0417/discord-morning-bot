@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from collectors.civil_service import collect_all_civil_service
@@ -81,19 +82,45 @@ class RegressionTests(unittest.TestCase):
             process_with_gemini("it_news", "  ")
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
-    @patch("processors.gemini_processor.genai.GenerativeModel")
-    def test_gemini_failure_is_not_treated_as_success(self, mocked_model):
-        mocked_model.return_value.generate_content.side_effect = RuntimeError("API failure")
+    @patch("processors.gemini_processor.genai.Client")
+    def test_gemini_failure_is_not_treated_as_success(self, mocked_client):
+        mocked_client.return_value.models.generate_content.side_effect = RuntimeError("API failure")
         with self.assertRaises(RuntimeError):
             process_with_gemini("it_news", "뉴스 원문")
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
-    @patch("processors.gemini_processor.genai.GenerativeModel")
-    def test_gemini_quota_exhaustion_returns_full_raw_news(self, mocked_model):
+    @patch("processors.gemini_processor.genai.Client")
+    def test_gemini_quota_exhaustion_returns_full_raw_news(self, mocked_client):
         raw_news = "뉴스 목록\n" + "A" * 5000
-        mocked_model.return_value.generate_content.side_effect = RuntimeError(
+        mocked_client.return_value.models.generate_content.side_effect = RuntimeError(
             "429 RESOURCE_EXHAUSTED: quota exceeded"
         )
+
+        self.assertEqual(raw_news, process_with_gemini("it_news", raw_news))
+
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.Client")
+    def test_incomplete_gemini_response_returns_full_raw_news(self, mocked_client):
+        raw_news = "완전한 원문 뉴스 목록"
+        response = Mock()
+        response.text = "중간에 잘린 AI 응답"
+        response.candidates = [
+            SimpleNamespace(finish_reason=SimpleNamespace(name="MAX_TOKENS"))
+        ]
+        mocked_client.return_value.models.generate_content.return_value = response
+
+        self.assertEqual(raw_news, process_with_gemini("it_news", raw_news))
+
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.Client")
+    def test_short_news_list_returns_full_raw_news(self, mocked_client):
+        raw_news = "완전한 원문 뉴스 목록"
+        response = Mock()
+        response.text = "1. 첫 기사\n→ 한 줄 요약\n🔗 https://example.com/1"
+        response.candidates = [
+            SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
+        ]
+        mocked_client.return_value.models.generate_content.return_value = response
 
         self.assertEqual(raw_news, process_with_gemini("it_news", raw_news))
 

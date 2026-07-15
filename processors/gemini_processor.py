@@ -1,13 +1,12 @@
 """Google Gemini LLM 요약/가공 프로세서"""
-import google.generativeai as genai
+import re
+
+from google import genai
+from google.genai import types
 from config import Config
 from utils.logger import setup_logger
 
 logger = setup_logger("gemini")
-
-# Gemini 초기화
-if Config.GEMINI_API_KEY:
-    genai.configure(api_key=Config.GEMINI_API_KEY)
 
 # 카테고리별 시스템 프롬프트
 SYSTEM_PROMPTS = {
@@ -70,6 +69,28 @@ def _is_quota_exhausted(error: Exception) -> bool:
     return any(marker in error_text for marker in quota_markers)
 
 
+def _is_complete_response(response) -> bool:
+    """Gemini 응답이 토큰 제한 등으로 중단되지 않고 정상 완료됐는지 확인합니다."""
+    candidates = getattr(response, "candidates", None) or []
+    if not candidates:
+        return False
+
+    finish_reason = getattr(candidates[0], "finish_reason", None)
+    finish_name = getattr(finish_reason, "name", str(finish_reason))
+    return finish_name.upper().endswith("STOP")
+
+
+def _is_complete_news_list(category: str, result: str) -> bool:
+    """뉴스 결과에 최소 5개의 번호·한 줄 요약·링크가 모두 있는지 확인합니다."""
+    if category not in {"it_news", "civil_service"}:
+        return True
+
+    numbered_items = re.findall(r"(?m)^\s*\d+[.)]\s+", result)
+    summary_lines = re.findall(r"(?m)^\s*(?:→|->)\s+", result)
+    links = re.findall(r"https?://\S+", result)
+    return min(len(numbered_items), len(summary_lines), len(links)) >= 5
+
+
 def process_with_gemini(category: str, raw_data: str) -> str:
     """Gemini를 사용하여 원시 데이터를 가공합니다."""
     if not raw_data or not raw_data.strip():
@@ -81,17 +102,29 @@ def process_with_gemini(category: str, raw_data: str) -> str:
     system_prompt = SYSTEM_PROMPTS.get(category, "다음 내용을 한국어로 간결하게 요약해주세요.")
 
     try:
-        model = genai.GenerativeModel("gemini-flash-latest")
-        response = model.generate_content(
-            f"{system_prompt}\n\n--- 데이터 ---\n{raw_data}",
-            generation_config=genai.types.GenerationConfig(
-                max_output_tokens=1500,
-                temperature=0.7,
+        client = genai.Client(api_key=Config.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=f"{system_prompt}\n\n--- 데이터 ---\n{raw_data}",
+            config=types.GenerateContentConfig(
+                max_output_tokens=8192,
+                temperature=0.2,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
-        result = response.text.strip()
+        result = (response.text or "").strip()
         if not result:
             raise RuntimeError("Gemini 응답이 비어 있습니다.")
+        if not _is_complete_response(response):
+            logger.warning(
+                f"[{category}] Gemini 응답이 중단됨 - 수집한 원문 전체를 전송합니다."
+            )
+            return raw_data
+        if not _is_complete_news_list(category, result):
+            logger.warning(
+                f"[{category}] Gemini 뉴스 목록이 불완전함 - 수집한 원문 전체를 전송합니다."
+            )
+            return raw_data
         logger.info(f"[{category}] Gemini 가공 완료 ({len(result)}자)")
         return result
 
