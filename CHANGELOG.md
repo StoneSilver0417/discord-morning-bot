@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-07-20
+
+### 수정
+- 공무원 네이버 뉴스 검색 결과의 제목/설명 파싱이 깨져 있던 원인 확인: 네이버가 배포마다 클래스명을 해시로 바꿔 기존 `a.news_tit`/`div.news_dsc` 셀렉터가 더 이상 매치되지 않고, 폴백 셀렉터(`a[class*='fender-ui']`)가 "새 창 열림", "Keep에 저장", 언론사 배지 링크까지 제목으로 주워옴
+- `collectors/civil_service.py`를 href 그룹핑 방식으로 재작성: keep.naver.com/언론사 배지/빈 텍스트/단독 텍스트(설명 없는 그룹)를 제외하고, 같은 기사 href에 딸린 첫 텍스트를 제목(끝의 "새 창 열림" 문구 제거), 두 번째 텍스트를 설명으로 사용
+- 부수 효과: civil_service Gemini 프롬프트에 전달되는 원문 품질이 좋아져, 요약 실패 시 원문 폴백에도 실제 기사 설명이 표시됨 (기존에는 "기사 설명 없음"이 대부분)
+
+### 검증
+- 9개 키워드 전체로 `collect_all_civil_service()` 실행, 상위 10개 결과에 UI 문구 없이 실제 제목·설명만 포함됨을 육안 확인
+- `python test_collectors.py` 및 `python -m unittest tests.test_regressions`(15개) 통과
+
 ## 2026-07-15
 
 ### 테스트 발송 및 503 폴백
