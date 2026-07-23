@@ -121,7 +121,7 @@ def process_with_gemini(category: str, raw_data: str) -> str:
             config=types.GenerateContentConfig(
                 max_output_tokens=8192,
                 temperature=0.2,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+                thinking_config=types.ThinkingConfig(thinking_budget=1),
             ),
         )
         result = (response.text or "").strip()
