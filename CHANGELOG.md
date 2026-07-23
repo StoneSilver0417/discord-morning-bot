@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-07-23
+
+### 장애 조사 및 수정
+- 사용자가 "최근 이틀째 오류"라고 보고, `gh run list`로 2026-07-21·07-22 스케줄 실행이 4개 카테고리 전부 `400 INVALID_ARGUMENT`로 실패한 것 확인
+- 각 실행의 `pip install` 로그를 비교해 원인 특정: 07-20(성공)은 `google-genai==2.12.1`, 07-21(실패)부터 `2.13.0`으로 자동 업그레이드됨 (`requirements.txt`가 `google-genai>=1.0.0`으로 상한 없음)
+- 로컬에 `google-genai==2.14.0`을 설치해 재현: `client.models.generate_content(..., thinking_config=ThinkingConfig(thinking_budget=0))` 호출만 단독으로 `400 INVALID_ARGUMENT` 발생, 나머지 파라미터(`max_output_tokens`, `temperature`)는 문제 없음을 이분 탐색으로 확인
+- `client.models.get(model='gemini-flash-latest')`와 429 오류 메시지로 별칭이 `gemini-3.6-flash`를 가리키는 것을 확인, `thinking_budget=1` 이상은 정상 동작하고 `0`만 거부되는 것을 실측
+- `processors/gemini_processor.py`의 `thinking_budget`을 `0`에서 `1`로 수정
+- `requirements.txt`의 `google-genai` 버전을 고정할지 사용자에게 확인 → 지금처럼 무제한(`>=1.0.0`) 유지하기로 결정
+
+### 검증
+- 회귀 테스트 15개 통과
+- 실제 Gemini API 호출로 civil_service 카테고리 전체 파이프라인이 태그·한 줄 요약·링크를 정상 생성하는 것 확인
+- `gh workflow run`으로 수동 실행(`29990930845`) → 4개 카테고리 Gemini 가공 성공 + Discord 전송 성공(`success`) 확인
+
 ## 2026-07-20
 
 ### 수정
