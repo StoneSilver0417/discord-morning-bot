@@ -384,10 +384,10 @@ class RegressionTests(unittest.TestCase):
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
-    def test_short_news_list_returns_full_raw_news(self, mocked_client):
+    def test_invalid_news_list_returns_full_raw_news(self, mocked_client):
         raw_news = "완전한 원문 뉴스 목록"
         response = Mock()
-        response.text = "1. 첫 기사\n→ 한 줄 요약\n🔗 https://example.com/1"
+        response.text = "1. 첫 기사 제목만 있고 요약이나 링크가 전혀 없는 불완전한 결과"
         response.candidates = [
             SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
         ]
@@ -484,13 +484,18 @@ class RegressionTests(unittest.TestCase):
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
-    def test_news_list_minimum_three_accepted(self, mocked_client):
+    def test_news_list_detailed_format_accepted(self, mocked_client):
         raw_news = "완전한 원문 뉴스 목록"
         response = Mock()
         response.text = (
-            "1. 기사1\n→ 요약1\n🔗 https://example.com/1\n"
-            "2. 기사2\n→ 요약2\n🔗 https://example.com/2\n"
-            "3. 기사3\n→ 요약3\n🔗 https://example.com/3"
+            "1. [보안] 기사1\n"
+            "   • 내용 요약: 핵심 내용 요약1\n"
+            "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향1\n"
+            "   🔗 https://example.com/1\n"
+            "2. [클라우드] 기사2\n"
+            "   • 내용 요약: 핵심 내용 요약2\n"
+            "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향2\n"
+            "   🔗 https://example.com/2"
         )
         response.candidates = [
             SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
@@ -502,12 +507,16 @@ class RegressionTests(unittest.TestCase):
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
-    def test_news_list_two_items_rejected(self, mocked_client):
+    def test_news_list_missing_link_rejected(self, mocked_client):
         raw_news = "완전한 원문 뉴스 목록"
         response = Mock()
         response.text = (
-            "1. 기사1\n→ 요약1\n🔗 https://example.com/1\n"
-            "2. 기사2\n→ 요약2\n🔗 https://example.com/2"
+            "1. [보안] 기사1\n"
+            "   • 내용 요약: 핵심 내용 요약1\n"
+            "   • 실무/영향: 실무 영향1\n"
+            "2. [클라우드] 기사2\n"
+            "   • 내용 요약: 핵심 내용 요약2\n"
+            "   • 실무/영향: 실무 영향2"
         )
         response.candidates = [
             SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
@@ -517,12 +526,18 @@ class RegressionTests(unittest.TestCase):
         result = process_with_gemini("it_news", raw_news)
         self.assertEqual(raw_news, result)
 
-    def test_system_prompts_selective_3_to_8(self):
+    def test_system_prompts_selective_3_to_5(self):
         from processors.gemini_processor import SYSTEM_PROMPTS
-        self.assertIn("3~8개", SYSTEM_PROMPTS["it_news"])
+        self.assertIn("3~5개", SYSTEM_PROMPTS["it_news"])
         self.assertIn("전산직 공무원", SYSTEM_PROMPTS["it_news"])
-        self.assertIn("3~8개", SYSTEM_PROMPTS["civil_service"])
+        self.assertIn("내용 요약", SYSTEM_PROMPTS["it_news"])
+        self.assertIn("실무/영향", SYSTEM_PROMPTS["it_news"])
+        self.assertIn("수집된 뉴스를 분석하여 가장 중요한 3~5개만 선별하고, 기사 내용을 상세히 요약할 것", SYSTEM_PROMPTS["it_news"])
+        self.assertIn("3~5개", SYSTEM_PROMPTS["civil_service"])
         self.assertIn("[전산직] [복지직] [공통]", SYSTEM_PROMPTS["civil_service"])
+        self.assertIn("내용 요약", SYSTEM_PROMPTS["civil_service"])
+        self.assertIn("실무/영향", SYSTEM_PROMPTS["civil_service"])
+        self.assertIn("수집된 뉴스를 분석하여 가장 중요한 3~5개만 선별하고, 기사 내용을 상세히 요약할 것", SYSTEM_PROMPTS["civil_service"])
 
     def test_is_model_not_found_detection(self):
         from processors.gemini_processor import _is_model_not_found
