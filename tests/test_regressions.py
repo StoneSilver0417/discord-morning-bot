@@ -3,9 +3,17 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from collectors.civil_service import collect_all_civil_service
+from collectors.civil_service import collect_all_civil_service, search_naver_news
 from collectors.it_news import collect_all_it_news
-from collectors.weather import collect_wind_forecast
+from collectors.stocks import collect_all_stocks, collect_naver_finance_news
+from collectors.weather import (
+    collect_wind_forecast,
+    collect_weather,
+    collect_all_weather,
+    get_pm10_grade,
+    get_pm25_grade,
+    get_weather_condition,
+)
 from formatters.discord_formatter import create_embeds, send_multiple_embeds
 from processors.gemini_processor import process_with_gemini
 from utils.time_utils import get_kst_now
@@ -33,6 +41,83 @@ class RegressionTests(unittest.TestCase):
             now.return_value = datetime(2026, 7, 15, 7, 0, tzinfo=timezone.utc)
             result = collect_wind_forecast("경산 중방동")
         self.assertIn("예보 날짜 불일치", result["error"])
+
+    def test_pm_grading(self):
+        self.assertEqual(get_pm10_grade(15), "좋음")
+        self.assertEqual(get_pm10_grade(30), "좋음")
+        self.assertEqual(get_pm10_grade(31), "보통")
+        self.assertEqual(get_pm10_grade(80), "보통")
+        self.assertEqual(get_pm10_grade(81), "나쁨")
+        self.assertEqual(get_pm10_grade(150), "나쁨")
+        self.assertEqual(get_pm10_grade(151), "매우나쁨")
+        self.assertEqual(get_pm10_grade(None), "정보없음")
+
+        self.assertEqual(get_pm25_grade(10), "좋음")
+        self.assertEqual(get_pm25_grade(15), "좋음")
+        self.assertEqual(get_pm25_grade(16), "보통")
+        self.assertEqual(get_pm25_grade(35), "보통")
+        self.assertEqual(get_pm25_grade(36), "나쁨")
+        self.assertEqual(get_pm25_grade(75), "나쁨")
+        self.assertEqual(get_pm25_grade(76), "매우나쁨")
+        self.assertEqual(get_pm25_grade(None), "정보없음")
+
+    def test_weather_condition_mapping(self):
+        self.assertEqual(get_weather_condition(0), "맑음")
+        self.assertEqual(get_weather_condition(1), "맑음")
+        self.assertEqual(get_weather_condition(2), "구름")
+        self.assertEqual(get_weather_condition(3), "구름")
+        self.assertEqual(get_weather_condition(61), "비")
+        self.assertEqual(get_weather_condition(71), "눈")
+        self.assertEqual(get_weather_condition(95), "뇌우")
+
+    @patch("collectors.weather.requests.get")
+    def test_collect_weather_success(self, mocked_get):
+        weather_resp = Mock()
+        weather_resp.raise_for_status.return_value = None
+        weather_resp.json.return_value = {
+            "current": {
+                "temperature_2m": 25.0,
+                "apparent_temperature": 27.0,
+                "relative_humidity_2m": 60,
+                "precipitation": 0.0,
+                "wind_speed_10m": 5.0,
+                "wind_direction_10m": 180,
+                "surface_pressure": 1013.0,
+                "weather_code": 1,
+            },
+            "daily": {
+                "time": ["2026-09-02"],
+                "temperature_2m_max": [29.0],
+                "temperature_2m_min": [20.0],
+                "precipitation_probability_max": [20],
+                "uv_index_max": [5.5],
+            },
+            "hourly": {
+                "time": ["2026-09-02T08:00", "2026-09-02T12:00", "2026-09-02T18:00"],
+                "temperature_2m": [22.0, 28.0, 24.0],
+                "weather_code": [1, 1, 2],
+            },
+        }
+        air_resp = Mock()
+        air_resp.raise_for_status.return_value = None
+        air_resp.json.return_value = {
+            "current": {
+                "pm10": 25.4,
+                "pm2_5": 12.1,
+            }
+        }
+        mocked_get.side_effect = [weather_resp, air_resp]
+
+        with patch("utils.time_utils.get_kst_now") as now:
+            now.return_value = datetime(2026, 9, 2, 7, 0, tzinfo=timezone.utc)
+            result = collect_weather("경산 중방동")
+
+        self.assertEqual(result["current_temp"], 25.0)
+        self.assertEqual(result["apparent_temp"], 27.0)
+        self.assertEqual(result["pm10_grade"], "좋음")
+        self.assertEqual(result["pm2_5_grade"], "좋음")
+        self.assertIn("미세: 25㎍/㎥ (좋음)", result["dust"])
+        self.assertIn("초미세: 12㎍/㎥ (좋음)", result["dust"])
 
     @patch("collectors.it_news.collect_hackernews", return_value=[])
     @patch("collectors.it_news.collect_rss_feeds", return_value=[])
@@ -76,6 +161,204 @@ class RegressionTests(unittest.TestCase):
         result = collect_all_civil_service()
         self.assertIn("설명: 공무원에게 미치는 영향", result)
         self.assertIn("https://example.com/civil", result)
+
+    def test_naver_news_missing_api_keys_returns_empty(self):
+        with patch.object(main.Config, "NAVER_CLIENT_ID", ""), patch.object(
+            main.Config, "NAVER_CLIENT_SECRET", ""
+        ):
+            articles = search_naver_news("공무원 정책")
+            self.assertEqual(articles, [])
+
+    @patch("collectors.civil_service.requests.get")
+    def test_naver_news_401_unauthorized_returns_empty(self, mocked_get):
+        resp = Mock()
+        resp.status_code = 401
+        mocked_get.return_value = resp
+        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
+            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
+        ):
+            articles = search_naver_news("공무원 정책")
+            self.assertEqual(articles, [])
+
+    @patch("collectors.civil_service.requests.get")
+    def test_naver_news_403_forbidden_returns_empty(self, mocked_get):
+        resp = Mock()
+        resp.status_code = 403
+        mocked_get.return_value = resp
+        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
+            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
+        ):
+            articles = search_naver_news("공무원 정책")
+            self.assertEqual(articles, [])
+
+    @patch("collectors.civil_service.requests.get")
+    def test_naver_news_cleaning_and_link_priority(self, mocked_get):
+        resp = Mock()
+        resp.status_code = 200
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {
+            "items": [
+                {
+                    "title": "<b>공무원</b> &quot;처우&quot; &amp; 급여 &apos;개선&apos;",
+                    "originallink": "https://news.example.com/art1",
+                    "link": "https://n.news.naver.com/mnews/article/1",
+                    "description": "정부가 <b>공무원</b> 처우를 <b>개선</b> &lt;합의&gt;",
+                    "pubDate": "Wed, 02 Sep 2026 09:00:00 +0900",
+                },
+                {
+                    "title": "전산직 <b>채용</b> 공고",
+                    "originallink": "",
+                    "link": "https://n.news.naver.com/mnews/article/2",
+                    "description": "전산직 공무원 <b>선발</b> 공고",
+                    "pubDate": "Wed, 02 Sep 2026 10:00:00 +0900",
+                },
+            ]
+        }
+        mocked_get.return_value = resp
+
+        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
+            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
+        ):
+            articles = search_naver_news("공무원", count=5)
+
+        self.assertEqual(len(articles), 2)
+        self.assertEqual(articles[0]["title"], '공무원 "처우" & 급여 \'개선\'')
+        self.assertEqual(articles[0]["summary"], "정부가 공무원 처우를 개선 <합의>")
+        self.assertEqual(articles[0]["link"], "https://news.example.com/art1")
+        self.assertEqual(articles[0]["keyword"], "공무원")
+
+        self.assertEqual(articles[1]["title"], "전산직 채용 공고")
+        self.assertEqual(articles[1]["link"], "https://n.news.naver.com/mnews/article/2")
+
+        call_kwargs = mocked_get.call_args.kwargs
+        self.assertEqual(call_kwargs["headers"]["X-Naver-Client-Id"], "test-id")
+        self.assertEqual(call_kwargs["headers"]["X-Naver-Client-Secret"], "test-secret")
+
+    @patch("collectors.civil_service.search_naver_news")
+    def test_collect_all_civil_service_dedup_and_prioritization(self, mocked_search):
+        mocked_search.side_effect = [
+            [
+                {"title": "공무원 처우 개선 종합 대책", "link": "https://ex.com/1", "summary": "설명1"},
+                {"title": "짧음", "link": "https://ex.com/2", "summary": "5자 미만"},
+            ],
+            [
+                {"title": "공무원 처우 개선 종합 대책", "link": "https://ex.com/1-dup", "summary": "중복 기사"},
+                {"title": "전산직 공무원 신규 채용 규모 확대", "link": "https://ex.com/3", "summary": ""},
+            ],
+            [
+                {"title": "사회복지직 공무원 수당 인상 결정", "link": "https://ex.com/4", "summary": "설명4"},
+            ],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        ]
+
+        result = collect_all_civil_service()
+        self.assertIn("공무원 처우 개선 종합 대책", result)
+        self.assertIn("사회복지직 공무원 수당 인상 결정", result)
+        self.assertIn("전산직 공무원 신규 채용 규모 확대", result)
+        self.assertNotIn("짧음", result)
+        self.assertNotIn("1-dup", result)
+
+    def test_naver_finance_news_missing_api_keys_returns_guidance(self):
+        with patch.object(main.Config, "NAVER_CLIENT_ID", ""), patch.object(
+            main.Config, "NAVER_CLIENT_SECRET", ""
+        ):
+            result = collect_naver_finance_news()
+            self.assertIn("Naver API 키 미설정으로 뉴스 수집 생략", result)
+
+    @patch("collectors.stocks.requests.get")
+    def test_naver_finance_news_401_unauthorized(self, mocked_get):
+        resp = Mock()
+        resp.status_code = 401
+        mocked_get.return_value = resp
+        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
+            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
+        ):
+            result = collect_naver_finance_news()
+            self.assertIn("Naver API 인증 실패", result)
+
+    @patch("collectors.stocks.requests.get")
+    def test_naver_finance_news_403_forbidden(self, mocked_get):
+        resp = Mock()
+        resp.status_code = 403
+        mocked_get.return_value = resp
+        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
+            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
+        ):
+            result = collect_naver_finance_news()
+            self.assertIn("Naver API 접근 거부", result)
+
+    @patch("collectors.stocks.requests.get")
+    def test_naver_finance_news_cleaning_dedup_and_format(self, mocked_get):
+        resp = Mock()
+        resp.status_code = 200
+        resp.raise_for_status.return_value = None
+        resp.json.return_value = {
+            "items": [
+                {
+                    "title": "코스피 <b>외국인</b> &quot;순매수&quot; &amp; 상승",
+                    "originallink": "https://finance.example.com/art1",
+                    "link": "https://n.news.naver.com/mnews/article/1",
+                    "description": "외국인 매수세에 힘입어 <b>코스피</b> 지수 &apos;상승&apos;",
+                    "pubDate": "Wed, 02 Sep 2026 09:00:00 +0900",
+                },
+                {
+                    "title": "코스피 <b>외국인</b> &quot;순매수&quot; &amp; 상승",
+                    "originallink": "https://finance.example.com/art1-dup",
+                    "link": "https://n.news.naver.com/mnews/article/1-dup",
+                    "description": "중복 기사 설명",
+                    "pubDate": "Wed, 02 Sep 2026 09:10:00 +0900",
+                },
+                {
+                    "title": "단신",
+                    "originallink": "",
+                    "link": "https://n.news.naver.com/mnews/article/short",
+                    "description": "너무 짧은 기사",
+                    "pubDate": "Wed, 02 Sep 2026 09:20:00 +0900",
+                },
+                {
+                    "title": "뉴욕증시 <b>혼조세</b> 마감",
+                    "originallink": "",
+                    "link": "https://n.news.naver.com/mnews/article/2",
+                    "description": "금리 인하 기대감 속 <b>혼조</b> 마감",
+                    "pubDate": "Wed, 02 Sep 2026 09:30:00 +0900",
+                },
+            ]
+        }
+        mocked_get.return_value = resp
+
+        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
+            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
+        ):
+            result = collect_naver_finance_news()
+
+        self.assertIn('코스피 외국인 "순매수" & 상승', result)
+        self.assertIn("외국인 매수세에 힘입어 코스피 지수 '상승'", result)
+        self.assertIn("https://finance.example.com/art1", result)
+        self.assertIn("뉴욕증시 혼조세 마감", result)
+        self.assertIn("https://n.news.naver.com/mnews/article/2", result)
+        self.assertNotIn("단신", result)
+        self.assertNotIn("art1-dup", result)
+
+        call_kwargs = mocked_get.call_args.kwargs
+        self.assertEqual(call_kwargs["headers"]["X-Naver-Client-Id"], "test-id")
+        self.assertEqual(call_kwargs["headers"]["X-Naver-Client-Secret"], "test-secret")
+
+    @patch("collectors.stocks.collect_index_data", return_value="[주요 지수 현황]\n  KOSPI: 2,600.00\n")
+    @patch("collectors.stocks.collect_korean_market", return_value="\n[한국 시장 상세]\n  시가총액 상위 10 종목:\n    삼성전자: +1.5%\n")
+    @patch("collectors.stocks.collect_naver_finance_news", return_value="\n[증권 주요 뉴스]\n  • 코스피 상승세 지속\n")
+    def test_collect_all_stocks_combines_all_sections(self, mock_news, mock_market, mock_idx):
+        result = collect_all_stocks()
+        self.assertIn("[주요 지수 현황]", result)
+        self.assertIn("KOSPI: 2,600.00", result)
+        self.assertIn("[한국 시장 상세]", result)
+        self.assertIn("삼성전자: +1.5%", result)
+        self.assertIn("[증권 주요 뉴스]", result)
+        self.assertIn("코스피 상승세 지속", result)
 
     def test_empty_input_is_not_sent_to_gemini(self):
         with self.assertRaises(ValueError):
@@ -165,6 +448,130 @@ class RegressionTests(unittest.TestCase):
             patch.object(main.Config, "DISCORD_WEBHOOK_CIVIL_SERVICE", ""),
         ):
             self.assertFalse(main.run_briefing())
+
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.Client")
+    def test_gemini_uses_category_model(self, mocked_client):
+        response = Mock()
+        response.text = "가공된 결과"
+        response.candidates = [
+            SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
+        ]
+        mocked_client.return_value.models.generate_content.return_value = response
+
+        process_with_gemini("weather", "날씨 원문")
+        mocked_client.return_value.models.generate_content.assert_called_with(
+            model="gemini-2.0-flash",
+            contents=unittest.mock.ANY,
+            config=unittest.mock.ANY,
+        )
+
+        mocked_client.return_value.models.generate_content.reset_mock()
+        response.text = (
+            "1. 기사1\n→ 요약1\n🔗 https://example.com/1\n"
+            "2. 기사2\n→ 요약2\n🔗 https://example.com/2\n"
+            "3. 기사3\n→ 요약3\n🔗 https://example.com/3"
+        )
+        process_with_gemini("it_news", "IT뉴스 원문")
+        mocked_client.return_value.models.generate_content.assert_called_with(
+            model="gemini-2.5-pro",
+            contents=unittest.mock.ANY,
+            config=unittest.mock.ANY,
+        )
+
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.Client")
+    def test_gemini_fallback_on_404(self, mocked_client):
+        response = Mock()
+        response.text = (
+            "1. 기사1\n→ 요약1\n🔗 https://example.com/1\n"
+            "2. 기사2\n→ 요약2\n🔗 https://example.com/2\n"
+            "3. 기사3\n→ 요약3\n🔗 https://example.com/3"
+        )
+        response.candidates = [
+            SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
+        ]
+        mocked_client.return_value.models.generate_content.side_effect = [
+            RuntimeError("404 Not Found: models/gemini-2.5-pro is not found"),
+            response,
+        ]
+
+        result = process_with_gemini("it_news", "IT뉴스 원문")
+        self.assertIn("1. 기사1", result)
+        self.assertEqual(2, mocked_client.return_value.models.generate_content.call_count)
+        first_call = mocked_client.return_value.models.generate_content.call_args_list[0]
+        second_call = mocked_client.return_value.models.generate_content.call_args_list[1]
+        self.assertEqual("gemini-2.5-pro", first_call.kwargs["model"])
+        self.assertEqual("gemini-2.0-flash", second_call.kwargs["model"])
+
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.Client")
+    def test_news_list_minimum_three_accepted(self, mocked_client):
+        raw_news = "완전한 원문 뉴스 목록"
+        response = Mock()
+        response.text = (
+            "1. 기사1\n→ 요약1\n🔗 https://example.com/1\n"
+            "2. 기사2\n→ 요약2\n🔗 https://example.com/2\n"
+            "3. 기사3\n→ 요약3\n🔗 https://example.com/3"
+        )
+        response.candidates = [
+            SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
+        ]
+        mocked_client.return_value.models.generate_content.return_value = response
+
+        result = process_with_gemini("it_news", raw_news)
+        self.assertEqual(response.text, result)
+
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.Client")
+    def test_news_list_two_items_rejected(self, mocked_client):
+        raw_news = "완전한 원문 뉴스 목록"
+        response = Mock()
+        response.text = (
+            "1. 기사1\n→ 요약1\n🔗 https://example.com/1\n"
+            "2. 기사2\n→ 요약2\n🔗 https://example.com/2"
+        )
+        response.candidates = [
+            SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
+        ]
+        mocked_client.return_value.models.generate_content.return_value = response
+
+        result = process_with_gemini("it_news", raw_news)
+        self.assertEqual(raw_news, result)
+
+    def test_system_prompts_selective_3_to_8(self):
+        from processors.gemini_processor import SYSTEM_PROMPTS
+        self.assertIn("3~8개", SYSTEM_PROMPTS["it_news"])
+        self.assertIn("전산직 공무원", SYSTEM_PROMPTS["it_news"])
+        self.assertIn("3~8개", SYSTEM_PROMPTS["civil_service"])
+        self.assertIn("[전산직] [복지직] [공통]", SYSTEM_PROMPTS["civil_service"])
+
+    def test_is_model_not_found_detection(self):
+        from processors.gemini_processor import _is_model_not_found
+        self.assertTrue(_is_model_not_found(RuntimeError("404 Not Found: model is not found")))
+        self.assertTrue(_is_model_not_found(Exception("models/gemini-2.5-pro is not supported")))
+        self.assertFalse(_is_model_not_found(RuntimeError("500 Internal Server Error")))
+
+    @patch("main.time.sleep")
+    @patch("main.send_multiple_embeds", return_value=True)
+    @patch("main.create_embeds", return_value=[{"description": "ok"}])
+    @patch("main.process_with_gemini", return_value="요약")
+    @patch("main.collect_all_civil_service", return_value="뉴스")
+    @patch("main.collect_all_it_news", return_value="뉴스")
+    @patch("main.collect_all_stocks", return_value="주식")
+    @patch("main.collect_all_weather", return_value="날씨")
+    def test_main_category_delays_35s(self, _weather, _stocks, _it, _civil, _gemini, _embeds, _send, mock_sleep):
+        with (
+            patch.object(main.Config, "DISCORD_WEBHOOK_MAIN", "https://example.invalid"),
+            patch.object(main.Config, "DISCORD_WEBHOOK_WEATHER", ""),
+            patch.object(main.Config, "DISCORD_WEBHOOK_STOCKS", ""),
+            patch.object(main.Config, "DISCORD_WEBHOOK_IT_NEWS", ""),
+            patch.object(main.Config, "DISCORD_WEBHOOK_CIVIL_SERVICE", ""),
+        ):
+            success = main.run_briefing()
+            self.assertTrue(success)
+            sleep_args = [call.args[0] for call in mock_sleep.call_args_list]
+            self.assertEqual(3, sleep_args.count(35))
 
 
 if __name__ == "__main__":

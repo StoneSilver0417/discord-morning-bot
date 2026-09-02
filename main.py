@@ -47,7 +47,8 @@ def run_briefing():
         logger.error(f"날씨 수집 실패: {e}")
         results["weather"] = f"날씨 정보를 가져올 수 없습니다. ({e})"
         category_failures.append("weather")
-    time.sleep(2)  # API 호출 간격
+    logger.info("⏳ 다음 카테고리 처리를 위해 35초간 대기합니다 (Gemini API 호출 제한 방지)...")
+    time.sleep(35)
 
     # 2. 주식 동향 수집 + 가공
     logger.info("📡 [2/4] 주식 동향 수집 중...")
@@ -58,7 +59,8 @@ def run_briefing():
         logger.error(f"주식 수집 실패: {e}")
         results["stocks"] = f"주식 정보를 가져올 수 없습니다. ({e})"
         category_failures.append("stocks")
-    time.sleep(2)
+    logger.info("⏳ 다음 카테고리 처리를 위해 35초간 대기합니다 (Gemini API 호출 제한 방지)...")
+    time.sleep(35)
 
     # 3. IT 뉴스 수집 + 가공
     logger.info("📡 [3/4] IT 뉴스 수집 중...")
@@ -69,7 +71,8 @@ def run_briefing():
         logger.error(f"IT뉴스 수집 실패: {e}")
         results["it_news"] = f"IT 뉴스를 가져올 수 없습니다. ({e})"
         category_failures.append("it_news")
-    time.sleep(2)
+    logger.info("⏳ 다음 카테고리 처리를 위해 35초간 대기합니다 (Gemini API 호출 제한 방지)...")
+    time.sleep(35)
 
     # 4. 공무원 뉴스 수집 + 가공
     logger.info("📡 [4/4] 공무원 뉴스 수집 중...")
@@ -80,7 +83,6 @@ def run_briefing():
         logger.error(f"공무원뉴스 수집 실패: {e}")
         results["civil_service"] = f"공무원 관련 뉴스를 가져올 수 없습니다. ({e})"
         category_failures.append("civil_service")
-    time.sleep(2)
 
     # 5. 디스코드 전송 (채널 분리)
     logger.info("📤 카테고리별 디스코드 전송 중...")

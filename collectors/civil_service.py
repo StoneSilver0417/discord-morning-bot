@@ -1,116 +1,118 @@
-"""공무원 관련 뉴스 수집기 - 네이버 뉴스 검색 기반"""
+"""공무원 관련 뉴스 수집기 - Naver Open API 뉴스 검색 기반"""
+import html
+import re
 import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse
 from config import Config
 from utils.logger import setup_logger
 
 logger = setup_logger("civil_service")
 
-_UI_SUFFIX = "새 창 열림"  # 네이버가 접근성을 위해 링크 텍스트 끝에 숨겨서 붙이는 문구
+
+def _clean_text(raw_text: str) -> str:
+    """HTML 특수문자 엔티티 및 태그를 완벽히 제거하고 공백을 정돈합니다."""
+    if not raw_text:
+        return ""
+    no_tags = re.sub(r"<[^>]+>", "", raw_text)
+    unescaped = html.unescape(no_tags)
+    return " ".join(unescaped.split()).strip()
 
 
-def _extract_articles(soup: BeautifulSoup) -> list:
-    """네이버 뉴스 검색 결과 HTML에서 제목/링크/설명을 추출합니다.
-
-    네이버가 배포마다 클래스명을 해시로 바꿔서 `a.news_tit` 같은 고정 셀렉터가
-    깨지는 경우가 있다. 이때는 실제 기사 링크(경로가 언론사 홈 루트가 아니고
-    keep.naver.com도 아닌 링크)만 href로 그룹핑해, 같은 href의 첫 텍스트를
-    제목(끝의 "새 창 열림" 문구 제거), 두 번째 텍스트를 설명으로 취급한다.
-    """
-    news_items = soup.select("a.news_tit")
-    if news_items:
-        articles = []
-        for item in news_items:
-            title = item.get_text(strip=True)
-            link = item.get("href", "")
-            if title:
-                articles.append({"title": title, "link": link, "summary": ""})
-        descs = soup.select("div.news_dsc, a.api_txt_lines.dsc_txt_wrap")
-        for i, desc in enumerate(descs[:len(articles)]):
-            articles[i]["summary"] = desc.get_text(strip=True)[:150]
-        return articles
-
-    grouped: dict[str, list] = {}
-    order = []
-    for a in soup.select("a[class*='fender-ui']"):
-        href = a.get("href", "")
-        if not href or href == "#" or href.startswith("javascript:"):
-            continue
-        if "keep.naver.com" in href or "media.naver.com/press" in href:
-            continue  # Keep 저장 버튼, 언론사 배지 링크 등 기사 본문이 아닌 UI 요소 제외
-        parsed = urlparse(href)
-        if (not parsed.path or parsed.path == "/") and not parsed.query:
-            continue  # 언론사 홈페이지 링크 등 기사 본문이 아닌 UI 요소 제외
-        text = a.get_text(strip=True).replace(_UI_SUFFIX, "").strip()
-        if not text or text == "네이버뉴스":
-            continue
-        if href not in grouped:
-            grouped[href] = []
-            order.append(href)
-        grouped[href].append(text)
-
-    articles = []
-    for href in order:
-        texts = grouped[href]
-        if len(texts) < 2:
-            continue  # 제목만 있고 설명이 없는 그룹은 대부분 배지·버튼류 UI 요소
-        articles.append({"title": texts[0], "link": href, "summary": texts[1][:150]})
-    return articles
-
-
-def search_naver_news(keyword: str, count: int = 5) -> list:
-    """네이버 뉴스 검색으로 키워드 관련 뉴스를 수집합니다."""
-    articles = []
-    try:
-        url = (
-            f"https://search.naver.com/search.naver"
-            f"?where=news&query={requests.utils.quote(keyword)}"
-            f"&sort=1"  # 최신순
+def search_naver_news(keyword: str, count: int = 10) -> list[dict]:
+    """Naver Open API 뉴스 검색으로 키워드 관련 뉴스를 수집합니다."""
+    if not Config.NAVER_CLIENT_ID or not Config.NAVER_CLIENT_SECRET:
+        logger.warning(
+            "[네이버뉴스] Naver API 키 미설정 (NAVER_CLIENT_ID / NAVER_CLIENT_SECRET)"
         )
-        resp = requests.get(url, headers=Config.HEADERS, timeout=10)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        return []
 
-        for art in _extract_articles(soup):
-            art["keyword"] = keyword
-            articles.append(art)
-            if len(articles) >= count:
-                break
+    articles: list[dict] = []
+    display_count = min(max(1, count), 100)
+    url = (
+        f"https://openapi.naver.com/v1/search/news.json"
+        f"?query={requests.utils.quote(keyword)}"
+        f"&display={display_count}"
+        f"&sort=sim"
+    )
+    headers = {
+        "X-Naver-Client-Id": Config.NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": Config.NAVER_CLIENT_SECRET,
+        "User-Agent": Config.USER_AGENT,
+    }
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 401:
+            logger.warning(
+                "[네이버뉴스] Naver API 인증 실패 (401 Unauthorized - Client ID/Secret 확인 필요)"
+            )
+            return []
+        if resp.status_code == 403:
+            logger.warning(
+                "[네이버뉴스] Naver API 접근 거부 (403 Forbidden - 권한 또는 일일 한도 초과)"
+            )
+            return []
+        resp.raise_for_status()
+
+        data = resp.json()
+        items = data.get("items", [])
+
+        for item in items:
+            title = _clean_text(item.get("title", ""))
+            summary = _clean_text(item.get("description", ""))
+            link = item.get("originallink") or item.get("link", "")
+            pub_date = item.get("pubDate", "")
+
+            if not title or not link:
+                continue
+
+            articles.append({
+                "title": title,
+                "link": link,
+                "summary": summary,
+                "pubDate": pub_date,
+                "keyword": keyword,
+            })
 
         logger.info(f"[네이버뉴스] '{keyword}' {len(articles)}건 수집")
 
-    except Exception as e:
+    except (requests.RequestException, ValueError, KeyError) as e:
         logger.error(f"[네이버뉴스] '{keyword}' 검색 실패: {e}")
 
     return articles
 
 
 def collect_all_civil_service() -> str:
-    """모든 키워드에 대해 공무원 뉴스를 수집하여 텍스트로 반환합니다."""
-    all_articles = []
-    seen_titles = set()
+    """모든 키워드에 대해 공무원 뉴스를 수집하여 텍스트형 리포트로 반환합니다."""
+    all_articles: list[dict] = []
+    seen_titles: set[str] = set()
 
     for keyword in Config.CIVIL_SERVICE_KEYWORDS:
-        news = search_naver_news(keyword, count=5)
+        news = search_naver_news(keyword, count=10)
         for item in news:
-            title = item["title"]
-            if title not in seen_titles:
-                all_articles.append(item)
-                seen_titles.add(title)
+            title = item.get("title", "")
+            if not title or len(title) < 5:
+                continue
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+            all_articles.append(item)
 
     if not all_articles:
         raise RuntimeError("모든 공무원 뉴스 검색 결과가 비어 있습니다.")
-    
-    # 요약 실패 시를 대비해 상위 10개만 텍스트로 변환 (링크 위주)
-    display_articles = all_articles[:10]
-    
-    text = f"[공무원 관련 뉴스 - 총 {len(all_articles)}건 중 상위 10개]\n\n"
+
+    # 설명이 있는 기사를 우선 순위로 정렬하고 최대 25~30건까지 수집
+    prioritized = sorted(
+        all_articles,
+        key=lambda a: 0 if a.get("summary") else 1,
+    )
+    display_articles = prioritized[:25]
+
+    text = f"[공무원 관련 뉴스 수집 결과 - 총 {len(all_articles)}건 중 후보 {len(display_articles)}건]\n\n"
     for i, art in enumerate(display_articles, 1):
         text += (
             f"{i}. **{art['title']}**\n"
             f"설명: {art.get('summary') or '기사 설명 없음'}\n"
             f"🔗 {art['link']}\n\n"
         )
-    
+
     return text

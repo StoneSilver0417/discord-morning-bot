@@ -28,9 +28,9 @@ SYSTEM_PROMPTS = {
     ),
     "it_news": (
         "당신은 IT 트렌드 큐레이터입니다. 다음 규칙을 따르세요:\n"
-        "1. **전산직 공무원(IT 인프라, 보안, 시스템 관리, 디지털 전환)**에게 실무적으로 도움될 내용을 우선 선별하세요.\n"
-        "2. 국내외 공공기관, 정부 IT 정책, 보안 사고 예방 관련 기사는 반드시 포함하세요.\n"
-        "3. 가장 중요한 뉴스 5개를 골라 아래 형식을 정확히 반복하세요.\n"
+        "1. 제공된 뉴스 후보 중 중복 및 단순 홍보성 기사를 제거하고, **전산직 공무원(IT 인프라, 보안, 시스템 관리, 디지털 전환)**에게 실무적으로 가장 가치 있는 뉴스를 **3~8개** 자율 선별하세요. (중요 뉴스가 적으면 3개, 많으면 최대 8개)\n"
+        "2. 국내외 공공기관, 정부 IT 정책, 보안 사고 예방 관련 기사는 최우선 포함하세요.\n"
+        "3. 선별한 각 뉴스를 아래 형식으로 정확히 작성하세요.\n"
         "   번호. 기사 제목 (출처)\n"
         "   → 핵심 내용과 실무 의미를 쉬운 한국어 한 문장으로 요약\n"
         "   🔗 원문 URL\n"
@@ -39,9 +39,9 @@ SYSTEM_PROMPTS = {
     ),
     "civil_service": (
         "당신은 공무원 관련 뉴스 큐레이터입니다. 다음 규칙을 따르세요:\n"
-        "1. [전산직] [복지직] [공통] 태그를 활용하여 중요한 뉴스 5~8개를 고르세요.\n"
-        "2. 급여, 연금, 처우 개선, 채용 일정 등 모든 공무원에게 중요한 소식을 우선 포함하세요.\n"
-        "3. 각 뉴스를 아래 형식으로 정확히 반복하세요.\n"
+        "1. 제공된 뉴스 후보 중 중복 기사를 제거하고, 오늘 공무원에게 가장 중요한 뉴스를 **3~8개** 자율 선별하세요. (중요 소식이 적으면 3개, 이슈가 많으면 최대 8개)\n"
+        "2. [전산직] [복지직] [공통] 직렬 태그를 적절히 활용하고, 급여, 연금, 처우 개선, 채용 일정 등 모든 공무원에게 파급력이 큰 소식을 우선 포함하세요.\n"
+        "3. 선별한 각 뉴스를 아래 형식으로 정확히 작성하세요.\n"
         "   번호. [직렬 태그] 기사 제목\n"
         "   → 핵심 내용과 공무원에게 미치는 영향을 쉬운 한국어 한 문장으로 요약\n"
         "   🔗 원문 URL\n"
@@ -81,6 +81,24 @@ def _is_transient_error(error: Exception) -> bool:
     return any(marker in error_text for marker in transient_markers)
 
 
+def _is_model_not_found(error: Exception) -> bool:
+    """모델 미지원(404 Not Found 등) 오류인지 확인합니다."""
+    error_text = f"{type(error).__name__} {error}".lower()
+    markers = (
+        "404",
+        "not_found",
+        "not found",
+        "unsupported",
+        "is not supported",
+        "model not found",
+        "does not exist",
+    )
+    return any(marker in error_text for marker in markers)
+
+
+_is_model_unsupported_or_not_found = _is_model_not_found
+
+
 def _is_complete_response(response) -> bool:
     """Gemini 응답이 토큰 제한 등으로 중단되지 않고 정상 완료됐는지 확인합니다."""
     candidates = getattr(response, "candidates", None) or []
@@ -93,14 +111,14 @@ def _is_complete_response(response) -> bool:
 
 
 def _is_complete_news_list(category: str, result: str) -> bool:
-    """뉴스 결과에 최소 5개의 번호·한 줄 요약·링크가 모두 있는지 확인합니다."""
+    """뉴스 결과에 최소 3개의 번호·한 줄 요약·링크가 모두 있는지 확인합니다."""
     if category not in {"it_news", "civil_service"}:
         return True
 
     numbered_items = re.findall(r"(?m)^\s*\d+[.)]\s+", result)
     summary_lines = re.findall(r"(?m)^\s*(?:→|->)\s+", result)
     links = re.findall(r"https?://\S+", result)
-    return min(len(numbered_items), len(summary_lines), len(links)) >= 5
+    return min(len(numbered_items), len(summary_lines), len(links)) >= 3
 
 
 def process_with_gemini(category: str, raw_data: str) -> str:
@@ -112,18 +130,38 @@ def process_with_gemini(category: str, raw_data: str) -> str:
         return raw_data
 
     system_prompt = SYSTEM_PROMPTS.get(category, "다음 내용을 한국어로 간결하게 요약해주세요.")
+    primary_model = Config.get_model_for_category(category)
+    fallback_model = Config.GEMINI_MODEL_FALLBACK
+    client = genai.Client(api_key=Config.GEMINI_API_KEY)
+
+    prompt_contents = f"{system_prompt}\n\n--- 데이터 ---\n{raw_data}"
+    gen_config = types.GenerateContentConfig(
+        max_output_tokens=8192,
+        temperature=0.2,
+        thinking_config=types.ThinkingConfig(thinking_budget=1),
+    )
 
     try:
-        client = genai.Client(api_key=Config.GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model="gemini-flash-latest",
-            contents=f"{system_prompt}\n\n--- 데이터 ---\n{raw_data}",
-            config=types.GenerateContentConfig(
-                max_output_tokens=8192,
-                temperature=0.2,
-                thinking_config=types.ThinkingConfig(thinking_budget=1),
-            ),
-        )
+        try:
+            response = client.models.generate_content(
+                model=primary_model,
+                contents=prompt_contents,
+                config=gen_config,
+            )
+        except Exception as primary_err:
+            if primary_model != fallback_model and _is_model_not_found(primary_err):
+                logger.warning(
+                    f"[{category}] 모델 '{primary_model}' 오류 발생 ({primary_err}) - "
+                    f"폴백 모델 '{fallback_model}'로 1회 재시도합니다."
+                )
+                response = client.models.generate_content(
+                    model=fallback_model,
+                    contents=prompt_contents,
+                    config=gen_config,
+                )
+            else:
+                raise primary_err
+
         result = (response.text or "").strip()
         if not result:
             raise RuntimeError("Gemini 응답이 비어 있습니다.")

@@ -1,121 +1,96 @@
-"""날씨 수집기 - 네이버 날씨 + Windy 크롤링"""
+"""날씨 수집기 - Open-Meteo Forecast & Air Quality API 통합"""
 import requests
-from bs4 import BeautifulSoup
 from config import Config
 from utils.logger import setup_logger
+from utils.time_utils import get_kst_now
 
 logger = setup_logger("weather")
 
-
-def collect_naver_weather(location_query: str) -> dict:
-    """네이버 날씨 검색 결과를 크롤링합니다."""
-    url = f"https://search.naver.com/search.naver?query={requests.utils.quote(location_query)}"
-    data = {"location": location_query, "source": "naver"}
-
-    try:
-        resp = requests.get(url, headers=Config.HEADERS, timeout=10)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        # 현재 온도
-        temp_el = soup.select_one("div.temperature_text > strong")
-        if temp_el:
-            data["current_temp"] = temp_el.get_text(strip=True)
-
-        # 체감 온도
-        body_temp = soup.select_one("dd.desc")
-        if body_temp:
-            data["feels_like"] = body_temp.get_text(strip=True)
-
-        # 날씨 상태 (맑음, 흐림 등)
-        weather_summary = soup.select_one("span.weather.before_slash")
-        if weather_summary:
-            data["status"] = weather_summary.get_text(strip=True)
-
-        # 최저/최고 온도
-        min_max = soup.select("span.merge")
-        if min_max:
-            temps = [t.get_text(strip=True) for t in min_max]
-            data["min_max"] = " / ".join(temps)
-
-        # 미세먼지 (항목: 미세먼지, 초미세먼지, 자외선, 일몰 등)
-        dust_items = soup.select("li.item_today")
-        dust_info = []
-        for item in dust_items:
-            title = item.select_one(".title, span.label")
-            value = item.select_one(".txt, span.txt")
-            if title and value:
-                t_text = title.get_text(strip=True)
-                v_text = value.get_text(strip=True)
-                # 필요한 항목만 필터링 (미세, 초미세, 자외선)
-                if any(k in t_text for k in ["미세", "자외선"]):
-                    dust_info.append(f"{t_text}: {v_text}")
-        
-        if not dust_info:
-            # 보조: 다른 셀렉터 시도
-            alt_dust = soup.select("ul.today_chart_list li")
-            for item in alt_dust:
-                text = item.get_text(separator=":", strip=True)
-                if any(k in text for k in ["미세", "자외선"]):
-                    dust_info.append(text)
-
-        if dust_info:
-            data["dust"] = ", ".join(dust_info)
-
-        # 시간별 날씨
-        hourly_items = soup.select("div.cell_weather")
-        hourly = []
-        for item in hourly_items[:8]:
-            time_el = item.select_one("span.time")
-            temp_el2 = item.select_one("span.temperature")
-            if time_el and temp_el2:
-                hourly.append(f"{time_el.get_text(strip=True)} {temp_el2.get_text(strip=True)}")
-        if hourly:
-            data["hourly"] = hourly
-
-        # 강수확률
-        rain_items = soup.select("span.rainfall")
-        if rain_items:
-            data["rain_probability"] = [r.get_text(strip=True) for r in rain_items[:8]]
-
-        # 주간 날씨
-        weekly_items = soup.select("div.weekly_item, div.item_day")
-        weekly = []
-        for item in weekly_items[:7]:
-            text = item.get_text(separator=" ", strip=True)
-            if text:
-                weekly.append(text)
-        if weekly:
-            data["weekly"] = weekly
-
-        logger.info(f"[네이버] {location_query} 날씨 수집 완료")
-
-    except Exception as e:
-        logger.error(f"[네이버] {location_query} 크롤링 실패: {e}")
-        data["error"] = str(e)
-
-    return data
+COORDINATES = {
+    "경산 중방동": {"lat": 35.8256, "lon": 128.7414},
+    "대구 만촌동": {"lat": 35.8596, "lon": 128.6530},
+}
 
 
-def collect_wind_forecast(location_name: str) -> dict:
-    """Open-Meteo API로 바람/기압/3일예보를 수집합니다.
-    
-    Windy.com은 JavaScript SPA라 직접 크롤링 불가.
-    Open-Meteo는 Windy가 내부적으로 사용하는 동일한 기상모델(GFS/ECMWF)
-    데이터를 무료로 제공하는 공개 API입니다.
-    """
-    data = {"location": location_name, "source": "windy"}
+def get_pm10_grade(val: float | int | None) -> str:
+    """한국 환경부 기준 미세먼지(PM10) 등급을 반환합니다."""
+    if val is None:
+        return "정보없음"
+    if val <= 30:
+        return "좋음"
+    if val <= 80:
+        return "보통"
+    if val <= 150:
+        return "나쁨"
+    return "매우나쁨"
 
-    # Windy는 SPA(Single Page Application)이라 직접 크롤링이 어려움
-    # 대신 Open-Meteo API(무료)를 사용하여 바람/기압 데이터 보완
-    coords = {
-        "경산 중방동": {"lat": 35.8256, "lon": 128.7414},
-        "대구 만촌동": {"lat": 35.8596, "lon": 128.6530},
+
+def get_pm25_grade(val: float | int | None) -> str:
+    """한국 환경부 기준 초미세먼지(PM2.5) 등급을 반환합니다."""
+    if val is None:
+        return "정보없음"
+    if val <= 15:
+        return "좋음"
+    if val <= 35:
+        return "보통"
+    if val <= 75:
+        return "나쁨"
+    return "매우나쁨"
+
+
+def get_weather_condition(code: int) -> str:
+    """WMO 기상 코드를 한국어 날씨 상태로 변환합니다."""
+    if code <= 1:
+        return "맑음"
+    if code <= 3:
+        return "구름"
+    if code in {51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82}:
+        return "비"
+    if code in {71, 73, 75, 77, 85, 86}:
+        return "눈"
+    if code in {95, 96, 99}:
+        return "뇌우"
+    return "비/눈"
+
+
+def collect_air_quality(lat: float, lon: float) -> dict:
+    """Open-Meteo Air Quality API로 미세먼지(PM10) 및 초미세먼지(PM2.5)를 수집합니다."""
+    url = (
+        f"https://air-quality-api.open-meteo.com/v1/air-quality"
+        f"?latitude={lat}&longitude={lon}&current=pm10,pm2_5&timezone=Asia/Seoul"
+    )
+    resp = requests.get(url, timeout=10)
+    resp.raise_for_status()
+    result = resp.json()
+    current = result.get("current", {})
+
+    pm10 = current.get("pm10")
+    pm2_5 = current.get("pm2_5")
+
+    pm10_grade = get_pm10_grade(pm10)
+    pm25_grade = get_pm25_grade(pm2_5)
+
+    dust_parts = []
+    if pm10 is not None:
+        dust_parts.append(f"미세: {round(pm10)}㎍/㎥ ({pm10_grade})")
+    if pm2_5 is not None:
+        dust_parts.append(f"초미세: {round(pm2_5)}㎍/㎥ ({pm25_grade})")
+
+    dust_str = ", ".join(dust_parts) if dust_parts else "미세먼지 정보 없음"
+
+    return {
+        "pm10": pm10,
+        "pm10_grade": pm10_grade,
+        "pm2_5": pm2_5,
+        "pm2_5_grade": pm25_grade,
+        "dust": dust_str,
     }
 
-    coord = coords.get(location_name, coords["경산 중방동"])
 
-    from utils.time_utils import get_kst_now
+def collect_weather(location_name: str) -> dict:
+    """Open-Meteo API를 사용하여 특정 지역의 종합 날씨 정보를 수집합니다."""
+    data = {"location": location_name, "source": "open-meteo"}
+    coord = COORDINATES.get(location_name, COORDINATES["경산 중방동"])
     today_str = get_kst_now().strftime("%Y-%m-%d")
 
     try:
@@ -136,55 +111,63 @@ def collect_wind_forecast(location_name: str) -> dict:
         resp.raise_for_status()
         result = resp.json()
 
-        current = result.get("current", {})
-        data["wind_speed"] = f"{current.get('wind_speed_10m', 'N/A')} km/h"
-        data["wind_direction"] = f"{current.get('wind_direction_10m', 'N/A')}°"
-        data["pressure"] = f"{current.get('surface_pressure', 'N/A')} hPa"
-        data["humidity"] = f"{current.get('relative_humidity_2m', 'N/A')}%"
-        data["precipitation"] = f"{current.get('precipitation', 0)} mm"
-
         daily = result.get("daily", {})
-        if daily:
-            forecast_3d = []
-            dates = daily.get("time", [])
-            maxs = daily.get("temperature_2m_max", [])
-            mins = daily.get("temperature_2m_min", [])
-            rain_probs = daily.get("precipitation_probability_max", [])
-            uv = daily.get("uv_index_max", [])
-            for i in range(min(3, len(dates))):
-                forecast_3d.append({
-                    "date": dates[i] if i < len(dates) else "",
-                    "max": maxs[i] if i < len(maxs) else "",
-                    "min": mins[i] if i < len(mins) else "",
-                    "rain_prob": f"{rain_probs[i]}%" if i < len(rain_probs) else "",
-                    "uv": uv[i] if i < len(uv) else "",
-                })
-            data["forecast_3d"] = forecast_3d
-
         dates = daily.get("time", []) if daily else []
         if not dates or dates[0] != today_str:
             raise ValueError(
                 f"Open-Meteo 예보 날짜 불일치: 요청={today_str}, 응답={dates[:1]}"
             )
 
+        current = result.get("current", {})
+        data["current_temp"] = current.get("temperature_2m")
+        data["apparent_temp"] = current.get("apparent_temperature")
+        data["humidity"] = current.get("relative_humidity_2m")
+        data["precipitation"] = current.get("precipitation", 0.0)
+        data["wind_speed"] = current.get("wind_speed_10m")
+        data["wind_direction"] = current.get("wind_direction_10m")
+        data["pressure"] = current.get("surface_pressure")
+        data["weather_code"] = current.get("weather_code")
+
+        maxs = daily.get("temperature_2m_max", [])
+        mins = daily.get("temperature_2m_min", [])
+        rain_probs = daily.get("precipitation_probability_max", [])
+        uv = daily.get("uv_index_max", [])
+
+        forecast_3d = []
+        for i in range(min(3, len(dates))):
+            forecast_3d.append({
+                "date": dates[i] if i < len(dates) else "",
+                "max": maxs[i] if i < len(maxs) else "",
+                "min": mins[i] if i < len(mins) else "",
+                "rain_prob": f"{rain_probs[i]}%" if i < len(rain_probs) else "",
+                "uv": uv[i] if i < len(uv) else "",
+            })
+        data["forecast_3d"] = forecast_3d
+
         hourly = result.get("hourly", {})
         if hourly:
             times = hourly.get("time", [])
             temps = hourly.get("temperature_2m", [])
             codes = hourly.get("weather_code", [])
-            
+
             active_hours = []
             for i in range(len(times)):
-                # ISO 형식 시간에서 시간 추출 (예: 2026-05-13T08:00)
                 hour_str = times[i].split("T")[-1].split(":")[0]
                 hour = int(hour_str)
                 if 8 <= hour <= 23:
-                    # 기상 코드 단순화
-                    cond = "맑음" if codes[i] <= 1 else "구름" if codes[i] <= 3 else "비/눈"
+                    cond = get_weather_condition(codes[i])
                     active_hours.append(f"{hour}시({temps[i]}°/{cond})")
             data["hourly_active"] = " | ".join(active_hours)
 
-        logger.info(f"[Open-Meteo] {location_name} 보조 날씨 수집 완료")
+        # 미세먼지 수집
+        try:
+            air = collect_air_quality(coord["lat"], coord["lon"])
+            data.update(air)
+        except Exception as air_err:
+            logger.warning(f"[Open-Meteo] {location_name} 미세먼지 수집 실패: {air_err}")
+            data["dust"] = "미세먼지 정보 없음"
+
+        logger.info(f"[Open-Meteo] {location_name} 날씨 및 대기 정보 수집 완료")
 
     except Exception as e:
         logger.error(f"[Open-Meteo] {location_name} 수집 실패: {e}")
@@ -193,64 +176,84 @@ def collect_wind_forecast(location_name: str) -> dict:
     return data
 
 
+# 기존 테스트 및 코드 호환성을 위한 별칭
+collect_wind_forecast = collect_weather
+
+
+def calculate_period_stats(parts: list[str], target_hours: list[str]) -> dict | None:
+    """시간대별 예보 목록에서 지정된 시간대의 평균 기온 및 대표 날씨 상태를 계산합니다."""
+    items = [p for p in parts if p.split("시")[0] in target_hours]
+    if not items:
+        return None
+    temps = [float(p.split("(")[1].split("°")[0]) for p in items]
+    conds = [p.split("/")[1].replace(")", "") for p in items]
+    avg_temp = sum(temps) / len(temps)
+    main_cond = max(set(conds), key=conds.count)
+    return {"avg": round(avg_temp, 1), "cond": main_cond}
+
+
 def collect_all_weather() -> str:
     """모든 지역의 날씨 정보를 수집하여 텍스트형 리포트로 반환합니다."""
-    from config import Config
-    
     text = ""
-    for loc in Config.WEATHER_LOCATIONS:
-        n = collect_naver_weather(loc["query"])
-        w = collect_wind_forecast(loc["name"])
+    locations = [loc["name"] for loc in Config.WEATHER_LOCATIONS] if hasattr(Config, "WEATHER_LOCATIONS") else list(COORDINATES.keys())
+
+    for loc_name in locations:
+        w = collect_weather(loc_name)
 
         if "error" in w or not w.get("forecast_3d"):
             raise RuntimeError(
-                f"{loc['name']} 오늘 예보 수집 실패: {w.get('error', '오늘 예보 없음')}"
+                f"{loc_name} 오늘 예보 수집 실패: {w.get('error', '오늘 예보 없음')}"
             )
-        
-        text += f"📍 **{loc['name']} 날씨 리포트**\n"
-        
-        # 1. 최고/최저 및 현재 (기상모델 데이터 우선)
+
+        text += f"📍 **{loc_name} 날씨 리포트**\n"
+
+        # 1. 최고/최저 및 현재 기온, 체감온도
         f3 = w.get("forecast_3d", [])
-        if f3:
-            today = f3[0]
-            text += f"🌡️ **기온**: {today['min']}° ~ {today['max']}° (현재 {n.get('current_temp', 'N/A').replace('현재 온도', '').strip()})\n"
-        
+        today = f3[0]
+        cur_temp = w.get("current_temp", "N/A")
+        app_temp = w.get("apparent_temp")
+        temp_line = f"🌡️ **기온**: {today['min']}° ~ {today['max']}° (현재 {cur_temp}°"
+        if app_temp is not None:
+            temp_line += f", 체감 {app_temp}°"
+        temp_line += ")\n"
+        text += temp_line
+
         # 2. 미세먼지
-        dust_raw = n.get('dust', 'N/A')
-        unique_dust = []
-        seen = set()
-        for d in [p.strip() for p in dust_raw.split(",")]:
-            if d and d not in seen and ":" in d:
-                unique_dust.append(d.replace("미세먼지", "미세").replace("초미세먼지", "초미세"))
-                seen.add(d)
-        if unique_dust:
-            text += f"😷 **대기**: {', '.join(unique_dust[:2])}\n"
-            
-        # 3. 시간대별 요약 계산 (오전/오후/저녁)
-        hourly_raw = w.get('hourly_active', '')
+        dust_info = w.get("dust")
+        if dust_info:
+            text += f"😷 **대기**: {dust_info}\n"
+
+        # 3. 추가 기상 상세 (습도, 풍속, 강수확률, 자외선)
+        details = []
+        if w.get("humidity") is not None:
+            details.append(f"습도 {w['humidity']}%")
+        if w.get("wind_speed") is not None:
+            details.append(f"풍속 {w['wind_speed']}km/h")
+        rain_prob = today.get("rain_prob")
+        if rain_prob:
+            details.append(f"강수확률 {rain_prob}")
+        uv = today.get("uv")
+        if uv:
+            details.append(f"자외선 {uv}")
+        if details:
+            text += f"💧 **상세**: {', '.join(details)}\n"
+
+        # 4. 시간대별 요약 계산 (오전/오후/저녁)
+        hourly_raw = w.get("hourly_active", "")
         if hourly_raw:
             parts = hourly_raw.split(" | ")
-            
-            def get_stats(target_hours):
-                items = [p for p in parts if p.split("시")[0] in target_hours]
-                if not items: return None
-                # "8시(16.0°/구름)" -> 16.0 추출
-                temps = [float(p.split("(")[1].split("°")[0]) for p in items]
-                conds = [p.split("/")[1].replace(")", "") for p in items]
-                avg_temp = sum(temps) / len(temps)
-                # 가장 많이 등장한 날씨 상태
-                main_cond = max(set(conds), key=conds.count)
-                return {"avg": round(avg_temp, 1), "cond": main_cond}
-
-            morning = get_stats(["8", "9", "10", "11"])
-            afternoon = get_stats(["12", "13", "14", "15", "16", "17"])
-            evening = get_stats(["18", "19", "20", "21", "22", "23"])
+            morning = calculate_period_stats(parts, ["8", "9", "10", "11"])
+            afternoon = calculate_period_stats(parts, ["12", "13", "14", "15", "16", "17"])
+            evening = calculate_period_stats(parts, ["18", "19", "20", "21", "22", "23"])
 
             text += "📊 **시간대별 요약**\n"
-            if morning: text += f"└ 🌅 오전: 평균 **{morning['avg']}°** ({morning['cond']})\n"
-            if afternoon: text += f"└ ☀️ 오후: 평균 **{afternoon['avg']}°** ({afternoon['cond']})\n"
-            if evening: text += f"└ 🌙 저녁: 평균 **{evening['avg']}°** ({evening['cond']})\n"
-        
+            if morning:
+                text += f"└ 🌅 오전: 평균 **{morning['avg']}°** ({morning['cond']})\n"
+            if afternoon:
+                text += f"└ ☀️ 오후: 평균 **{afternoon['avg']}°** ({afternoon['cond']})\n"
+            if evening:
+                text += f"└ 🌙 저녁: 평균 **{evening['avg']}°** ({evening['cond']})\n"
+
         text += "\n"
 
     return text

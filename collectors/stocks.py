@@ -1,10 +1,20 @@
-"""주식 동향 수집기 - yfinance + FinanceDataReader + 네이버 증권 뉴스"""
+"""주식 동향 수집기 - yfinance + FinanceDataReader + 네이버 증권 뉴스 (Naver Open API)"""
+import html
+import re
 import requests
-from bs4 import BeautifulSoup
 from config import Config
 from utils.logger import setup_logger
 
 logger = setup_logger("stocks")
+
+
+def _clean_text(raw_text: str) -> str:
+    """HTML 특수문자 엔티티 및 태그를 완벽히 제거하고 공백을 정돈합니다."""
+    if not raw_text:
+        return ""
+    no_tags = re.sub(r"<[^>]+>", "", raw_text)
+    unescaped = html.unescape(no_tags)
+    return " ".join(unescaped.split()).strip()
 
 
 def collect_index_data() -> str:
@@ -77,53 +87,78 @@ def collect_korean_market() -> str:
 
 
 def collect_naver_finance_news() -> str:
-    """네이버 증권 뉴스 헤드라인을 크롤링합니다."""
+    """Naver Open API를 통해 증권/시황 뉴스를 수집합니다."""
     text = "\n[증권 주요 뉴스]\n"
 
+    if not Config.NAVER_CLIENT_ID or not Config.NAVER_CLIENT_SECRET:
+        logger.warning(
+            "[네이버뉴스] Naver API 키 미설정 (NAVER_CLIENT_ID / NAVER_CLIENT_SECRET)"
+        )
+        return text + "  (Naver API 키 미설정으로 뉴스 수집 생략)"
+
+    query = "증시 시황"
+    url = (
+        f"https://openapi.naver.com/v1/search/news.json"
+        f"?query={requests.utils.quote(query)}"
+        f"&display=15"
+        f"&sort=sim"
+    )
+    headers = {
+        "X-Naver-Client-Id": Config.NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": Config.NAVER_CLIENT_SECRET,
+        "User-Agent": Config.USER_AGENT,
+    }
+
     try:
-        url = "https://finance.naver.com/news/mainnews.naver"
-        resp = requests.get(url, headers=Config.HEADERS, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 401:
+            logger.warning(
+                "[네이버뉴스] Naver API 인증 실패 (401 Unauthorized - Client ID/Secret 확인 필요)"
+            )
+            return text + "  (Naver API 인증 실패)"
+        if resp.status_code == 403:
+            logger.warning(
+                "[네이버뉴스] Naver API 접근 거부 (403 Forbidden - 권한 또는 일일 한도 초과)"
+            )
+            return text + "  (Naver API 접근 거부)"
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
 
-        # Try specific finance main news selectors first
-        news_items = soup.select("dd.articleSubject a, a.articleSubject, .main_news_list a")
-        
-        if not news_items:
-            # Fallback for search results or other structures
-            news_items = soup.select("a.news_tit")
-            
-        if not news_items:
-            # Fallback for new/dynamic classes (e.g. fender-ui)
-            news_items = soup.select("a[class*='fender-ui']")
-            
-        headlines = []
-        for item in news_items:
-            title = item.get_text(strip=True)
-            href = item.get("href", "")
-            if title and len(title) > 10:
-                if href and not href.startswith("http"):
-                    href = f"https://finance.naver.com{href}"
-                headlines.append(f"  • {title}")
-                if len(headlines) >= 10:
-                    break
+        data = resp.json()
+        items = data.get("items", [])
 
-        if not headlines:
-            # 대체: 네이버 검색 뉴스
-            search_url = "https://search.naver.com/search.naver?where=news&query=증시+시황"
-            resp2 = requests.get(search_url, headers=Config.HEADERS, timeout=10)
-            soup2 = BeautifulSoup(resp2.text, "html.parser")
-            for a in soup2.select("a.news_tit")[:10]:
-                title = a.get_text(strip=True)
-                if title:
-                    headlines.append(f"  • {title}")
+        headlines: list[str] = []
+        seen_titles: set[str] = set()
 
-        text += "\n".join(headlines) if headlines else "  뉴스를 가져올 수 없습니다."
-        logger.info(f"[네이버증권] 뉴스 {len(headlines)}건 수집")
+        for item in items:
+            title = _clean_text(item.get("title", ""))
+            summary = _clean_text(item.get("description", ""))
+            link = item.get("originallink") or item.get("link", "")
+
+            if not title or not link or len(title) < 5:
+                continue
+
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
+
+            if summary:
+                headlines.append(f"  • {title}\n    설명: {summary}\n    🔗 {link}")
+            else:
+                headlines.append(f"  • {title}\n    🔗 {link}")
+
+            if len(headlines) >= 10:
+                break
+
+        if headlines:
+            text += "\n".join(headlines)
+            logger.info(f"[네이버증권] 뉴스 {len(headlines)}건 수집 완료")
+        else:
+            text += "  뉴스를 가져올 수 없습니다."
+            logger.warning("[네이버증권] 수집된 뉴스가 없습니다.")
 
     except Exception as e:
-        logger.error(f"[네이버증권] 뉴스 크롤링 실패: {e}")
-        text += f"  크롤링 실패: {e}"
+        logger.error(f"[네이버증권] 뉴스 수집 실패: {e}")
+        text += f"  뉴스 수집 실패: {e}"
 
     return text
 

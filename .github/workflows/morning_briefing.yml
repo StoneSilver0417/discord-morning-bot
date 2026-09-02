@@ -32,8 +32,15 @@ jobs:
       - name: Run Morning Briefing
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DISCORD_WEBHOOK_MAIN: ${{ secrets.DISCORD_WEBHOOK_MAIN }}
           DISCORD_WEBHOOK_WEATHER: ${{ secrets.DISCORD_WEBHOOK_WEATHER }}
           DISCORD_WEBHOOK_STOCKS: ${{ secrets.DISCORD_WEBHOOK_STOCKS }}
           DISCORD_WEBHOOK_IT_NEWS: ${{ secrets.DISCORD_WEBHOOK_IT_NEWS }}
           DISCORD_WEBHOOK_CIVIL_SERVICE: ${{ secrets.DISCORD_WEBHOOK_CIVIL_SERVICE }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          GEMINI_MODEL_WEATHER: ${{ secrets.GEMINI_MODEL_WEATHER }}
+          GEMINI_MODEL_STOCKS: ${{ secrets.GEMINI_MODEL_STOCKS }}
+          GEMINI_MODEL_IT_NEWS: ${{ secrets.GEMINI_MODEL_IT_NEWS }}
+          GEMINI_MODEL_CIVIL_SERVICE: ${{ secrets.GEMINI_MODEL_CIVIL_SERVICE }}
         run: python main.py
