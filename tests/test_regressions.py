@@ -3,9 +3,17 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from collectors.civil_service import collect_all_civil_service, search_naver_news
+from collectors.civil_service import (
+    collect_all_civil_service,
+    search_civil_service_news,
+    search_naver_news,
+)
 from collectors.it_news import collect_all_it_news
-from collectors.stocks import collect_all_stocks, collect_naver_finance_news
+from collectors.stocks import (
+    collect_all_stocks,
+    collect_naver_finance_news,
+    collect_stock_news,
+)
 from collectors.weather import (
     collect_wind_forecast,
     collect_weather,
@@ -125,7 +133,7 @@ class RegressionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             collect_all_it_news()
 
-    @patch("collectors.civil_service.search_naver_news", return_value=[])
+    @patch("collectors.civil_service.search_civil_service_news", return_value=[])
     def test_empty_civil_news_is_failure(self, _search):
         with self.assertRaises(RuntimeError):
             collect_all_civil_service()
@@ -148,7 +156,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("https://example.com/news", result)
 
     @patch(
-        "collectors.civil_service.search_naver_news",
+        "collectors.civil_service.search_civil_service_news",
         return_value=[
             {
                 "title": "공무원 테스트 기사",
@@ -162,79 +170,71 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("설명: 공무원에게 미치는 영향", result)
         self.assertIn("https://example.com/civil", result)
 
-    def test_naver_news_missing_api_keys_returns_empty(self):
-        with patch.object(main.Config, "NAVER_CLIENT_ID", ""), patch.object(
-            main.Config, "NAVER_CLIENT_SECRET", ""
-        ):
-            articles = search_naver_news("공무원 정책")
-            self.assertEqual(articles, [])
+    def test_civil_service_news_aliases(self):
+        self.assertIs(search_naver_news, search_civil_service_news)
 
-    @patch("collectors.civil_service.requests.get")
-    def test_naver_news_401_unauthorized_returns_empty(self, mocked_get):
-        resp = Mock()
-        resp.status_code = 401
-        mocked_get.return_value = resp
-        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
-            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
-        ):
-            articles = search_naver_news("공무원 정책")
-            self.assertEqual(articles, [])
+    @patch("collectors.civil_service.feedparser.parse")
+    def test_civil_service_rss_bozo_error_returns_empty(self, mocked_parse):
+        feed = Mock()
+        feed.bozo = True
+        feed.entries = []
+        feed.get.return_value = "SyntaxError"
+        mocked_parse.return_value = feed
 
-    @patch("collectors.civil_service.requests.get")
-    def test_naver_news_403_forbidden_returns_empty(self, mocked_get):
-        resp = Mock()
-        resp.status_code = 403
-        mocked_get.return_value = resp
-        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
-            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
-        ):
-            articles = search_naver_news("공무원 정책")
-            self.assertEqual(articles, [])
+        articles = search_civil_service_news("공무원 정책")
+        self.assertEqual(articles, [])
 
-    @patch("collectors.civil_service.requests.get")
-    def test_naver_news_cleaning_and_link_priority(self, mocked_get):
-        resp = Mock()
-        resp.status_code = 200
-        resp.raise_for_status.return_value = None
-        resp.json.return_value = {
-            "items": [
-                {
-                    "title": "<b>공무원</b> &quot;처우&quot; &amp; 급여 &apos;개선&apos;",
-                    "originallink": "https://news.example.com/art1",
-                    "link": "https://n.news.naver.com/mnews/article/1",
-                    "description": "정부가 <b>공무원</b> 처우를 <b>개선</b> &lt;합의&gt;",
-                    "pubDate": "Wed, 02 Sep 2026 09:00:00 +0900",
-                },
-                {
-                    "title": "전산직 <b>채용</b> 공고",
-                    "originallink": "",
-                    "link": "https://n.news.naver.com/mnews/article/2",
-                    "description": "전산직 공무원 <b>선발</b> 공고",
-                    "pubDate": "Wed, 02 Sep 2026 10:00:00 +0900",
-                },
-            ]
-        }
-        mocked_get.return_value = resp
+    @patch("collectors.civil_service.feedparser.parse")
+    def test_civil_service_rss_exception_returns_empty(self, mocked_parse):
+        mocked_parse.side_effect = Exception("Network timeout")
+        articles = search_civil_service_news("공무원 정책")
+        self.assertEqual(articles, [])
 
-        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
-            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
-        ):
-            articles = search_naver_news("공무원", count=5)
+    @patch("collectors.civil_service.feedparser.parse")
+    def test_civil_service_rss_cleaning_and_parsing(self, mocked_parse):
+        feed = Mock()
+        feed.bozo = False
+        feed.entries = [
+            {
+                "title": "<b>공무원</b> &quot;처우&quot; &amp; 급여 &apos;개선&apos;",
+                "summary": "정부가 <b>공무원</b> 처우를 <b>개선</b> &lt;합의&gt;",
+                "link": "https://news.google.com/rss/articles/CBMi1",
+                "published": "Wed, 02 Sep 2026 09:00:00 GMT",
+            },
+            {
+                "title": "전산직 <b>채용</b> 공고",
+                "description": "전산직 공무원 <b>선발</b> 공고",
+                "link": "https://news.google.com/rss/articles/CBMi2",
+                "pubDate": "Wed, 02 Sep 2026 10:00:00 GMT",
+            },
+            {
+                "title": "링크 없음",
+                "link": "",
+                "summary": "설명",
+            },
+        ]
+        mocked_parse.return_value = feed
+
+        articles = search_civil_service_news("공무원", count=5)
 
         self.assertEqual(len(articles), 2)
         self.assertEqual(articles[0]["title"], '공무원 "처우" & 급여 \'개선\'')
         self.assertEqual(articles[0]["summary"], "정부가 공무원 처우를 개선 <합의>")
-        self.assertEqual(articles[0]["link"], "https://news.example.com/art1")
+        self.assertEqual(articles[0]["link"], "https://news.google.com/rss/articles/CBMi1")
+        self.assertEqual(articles[0]["pubDate"], "Wed, 02 Sep 2026 09:00:00 GMT")
         self.assertEqual(articles[0]["keyword"], "공무원")
 
         self.assertEqual(articles[1]["title"], "전산직 채용 공고")
-        self.assertEqual(articles[1]["link"], "https://n.news.naver.com/mnews/article/2")
+        self.assertEqual(articles[1]["summary"], "전산직 공무원 선발 공고")
+        self.assertEqual(articles[1]["link"], "https://news.google.com/rss/articles/CBMi2")
+        self.assertEqual(articles[1]["pubDate"], "Wed, 02 Sep 2026 10:00:00 GMT")
 
-        call_kwargs = mocked_get.call_args.kwargs
-        self.assertEqual(call_kwargs["headers"]["X-Naver-Client-Id"], "test-id")
-        self.assertEqual(call_kwargs["headers"]["X-Naver-Client-Secret"], "test-secret")
+        mocked_parse.assert_called_once()
+        call_url = mocked_parse.call_args[0][0]
+        self.assertIn("https://news.google.com/rss/search?q=", call_url)
+        self.assertIn("hl=ko", call_url)
 
-    @patch("collectors.civil_service.search_naver_news")
+    @patch("collectors.civil_service.search_civil_service_news")
     def test_collect_all_civil_service_dedup_and_prioritization(self, mocked_search):
         mocked_search.side_effect = [
             [
@@ -263,94 +263,72 @@ class RegressionTests(unittest.TestCase):
         self.assertNotIn("짧음", result)
         self.assertNotIn("1-dup", result)
 
-    def test_naver_finance_news_missing_api_keys_returns_guidance(self):
-        with patch.object(main.Config, "NAVER_CLIENT_ID", ""), patch.object(
-            main.Config, "NAVER_CLIENT_SECRET", ""
-        ):
-            result = collect_naver_finance_news()
-            self.assertIn("Naver API 키 미설정으로 뉴스 수집 생략", result)
+    def test_stock_news_aliases(self):
+        self.assertIs(collect_naver_finance_news, collect_stock_news)
 
-    @patch("collectors.stocks.requests.get")
-    def test_naver_finance_news_401_unauthorized(self, mocked_get):
-        resp = Mock()
-        resp.status_code = 401
-        mocked_get.return_value = resp
-        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
-            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
-        ):
-            result = collect_naver_finance_news()
-            self.assertIn("Naver API 인증 실패", result)
+    @patch("collectors.stocks.feedparser.parse")
+    def test_stock_news_rss_bozo_empty_returns_fallback(self, mocked_parse):
+        feed = Mock()
+        feed.bozo = True
+        feed.entries = []
+        feed.get.return_value = "XML error"
+        mocked_parse.return_value = feed
 
-    @patch("collectors.stocks.requests.get")
-    def test_naver_finance_news_403_forbidden(self, mocked_get):
-        resp = Mock()
-        resp.status_code = 403
-        mocked_get.return_value = resp
-        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
-            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
-        ):
-            result = collect_naver_finance_news()
-            self.assertIn("Naver API 접근 거부", result)
+        result = collect_stock_news()
+        self.assertIn("뉴스를 가져올 수 없습니다.", result)
 
-    @patch("collectors.stocks.requests.get")
-    def test_naver_finance_news_cleaning_dedup_and_format(self, mocked_get):
-        resp = Mock()
-        resp.status_code = 200
-        resp.raise_for_status.return_value = None
-        resp.json.return_value = {
-            "items": [
-                {
-                    "title": "코스피 <b>외국인</b> &quot;순매수&quot; &amp; 상승",
-                    "originallink": "https://finance.example.com/art1",
-                    "link": "https://n.news.naver.com/mnews/article/1",
-                    "description": "외국인 매수세에 힘입어 <b>코스피</b> 지수 &apos;상승&apos;",
-                    "pubDate": "Wed, 02 Sep 2026 09:00:00 +0900",
-                },
-                {
-                    "title": "코스피 <b>외국인</b> &quot;순매수&quot; &amp; 상승",
-                    "originallink": "https://finance.example.com/art1-dup",
-                    "link": "https://n.news.naver.com/mnews/article/1-dup",
-                    "description": "중복 기사 설명",
-                    "pubDate": "Wed, 02 Sep 2026 09:10:00 +0900",
-                },
-                {
-                    "title": "단신",
-                    "originallink": "",
-                    "link": "https://n.news.naver.com/mnews/article/short",
-                    "description": "너무 짧은 기사",
-                    "pubDate": "Wed, 02 Sep 2026 09:20:00 +0900",
-                },
-                {
-                    "title": "뉴욕증시 <b>혼조세</b> 마감",
-                    "originallink": "",
-                    "link": "https://n.news.naver.com/mnews/article/2",
-                    "description": "금리 인하 기대감 속 <b>혼조</b> 마감",
-                    "pubDate": "Wed, 02 Sep 2026 09:30:00 +0900",
-                },
-            ]
-        }
-        mocked_get.return_value = resp
+    @patch("collectors.stocks.feedparser.parse")
+    def test_stock_news_rss_exception_returns_fallback(self, mocked_parse):
+        mocked_parse.side_effect = Exception("Connection error")
+        result = collect_stock_news()
+        self.assertIn("뉴스 수집 실패", result)
 
-        with patch.object(main.Config, "NAVER_CLIENT_ID", "test-id"), patch.object(
-            main.Config, "NAVER_CLIENT_SECRET", "test-secret"
-        ):
-            result = collect_naver_finance_news()
+    @patch("collectors.stocks.feedparser.parse")
+    def test_stock_news_rss_cleaning_dedup_and_format(self, mocked_parse):
+        feed = Mock()
+        feed.bozo = False
+        feed.entries = [
+            {
+                "title": "코스피 <b>외국인</b> &quot;순매수&quot; &amp; 상승",
+                "summary": "외국인 매수세에 힘입어 <b>코스피</b> 지수 &apos;상승&apos;",
+                "link": "https://news.google.com/rss/articles/CBMi1",
+            },
+            {
+                "title": "코스피 <b>외국인</b> &quot;순매수&quot; &amp; 상승",
+                "summary": "중복 기사 설명",
+                "link": "https://news.google.com/rss/articles/CBMi1-dup",
+            },
+            {
+                "title": "단신",
+                "summary": "너무 짧은 기사",
+                "link": "https://news.google.com/rss/articles/short",
+            },
+            {
+                "title": "뉴욕증시 <b>혼조세</b> 마감",
+                "description": "금리 인하 기대감 속 <b>혼조</b> 마감",
+                "link": "https://news.google.com/rss/articles/CBMi2",
+            },
+        ]
+        mocked_parse.return_value = feed
+
+        result = collect_stock_news()
 
         self.assertIn('코스피 외국인 "순매수" & 상승', result)
         self.assertIn("외국인 매수세에 힘입어 코스피 지수 '상승'", result)
-        self.assertIn("https://finance.example.com/art1", result)
+        self.assertIn("https://news.google.com/rss/articles/CBMi1", result)
         self.assertIn("뉴욕증시 혼조세 마감", result)
-        self.assertIn("https://n.news.naver.com/mnews/article/2", result)
+        self.assertIn("https://news.google.com/rss/articles/CBMi2", result)
         self.assertNotIn("단신", result)
-        self.assertNotIn("art1-dup", result)
+        self.assertNotIn("CBMi1-dup", result)
 
-        call_kwargs = mocked_get.call_args.kwargs
-        self.assertEqual(call_kwargs["headers"]["X-Naver-Client-Id"], "test-id")
-        self.assertEqual(call_kwargs["headers"]["X-Naver-Client-Secret"], "test-secret")
+        mocked_parse.assert_called_once()
+        call_url = mocked_parse.call_args[0][0]
+        self.assertIn("https://news.google.com/rss/search?q=", call_url)
+        self.assertIn("hl=ko", call_url)
 
     @patch("collectors.stocks.collect_index_data", return_value="[주요 지수 현황]\n  KOSPI: 2,600.00\n")
     @patch("collectors.stocks.collect_korean_market", return_value="\n[한국 시장 상세]\n  시가총액 상위 10 종목:\n    삼성전자: +1.5%\n")
-    @patch("collectors.stocks.collect_naver_finance_news", return_value="\n[증권 주요 뉴스]\n  • 코스피 상승세 지속\n")
+    @patch("collectors.stocks.collect_stock_news", return_value="\n[증권 주요 뉴스]\n  • 코스피 상승세 지속\n")
     def test_collect_all_stocks_combines_all_sections(self, mock_news, mock_market, mock_idx):
         result = collect_all_stocks()
         self.assertIn("[주요 지수 현황]", result)

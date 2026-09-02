@@ -1,7 +1,8 @@
-"""주식 동향 수집기 - yfinance + FinanceDataReader + 네이버 증권 뉴스 (Naver Open API)"""
+"""주식 동향 수집기 - yfinance + FinanceDataReader + Google News RSS"""
 import html
 import re
-import requests
+import urllib.parse
+import feedparser
 from config import Config
 from utils.logger import setup_logger
 
@@ -86,53 +87,27 @@ def collect_korean_market() -> str:
     return text
 
 
-def collect_naver_finance_news() -> str:
-    """Naver Open API를 통해 증권/시황 뉴스를 수집합니다."""
+def collect_stock_news(query: str = "증시 시황") -> str:
+    """Google News RSS를 통해 증권/시황 뉴스를 수집합니다."""
     text = "\n[증권 주요 뉴스]\n"
-
-    if not Config.NAVER_CLIENT_ID or not Config.NAVER_CLIENT_SECRET:
-        logger.warning(
-            "[네이버뉴스] Naver API 키 미설정 (NAVER_CLIENT_ID / NAVER_CLIENT_SECRET)"
-        )
-        return text + "  (Naver API 키 미설정으로 뉴스 수집 생략)"
-
-    query = "증시 시황"
-    url = (
-        f"https://openapi.naver.com/v1/search/news.json"
-        f"?query={requests.utils.quote(query)}"
-        f"&display=15"
-        f"&sort=sim"
-    )
-    headers = {
-        "X-Naver-Client-Id": Config.NAVER_CLIENT_ID,
-        "X-Naver-Client-Secret": Config.NAVER_CLIENT_SECRET,
-        "User-Agent": Config.USER_AGENT,
-    }
+    encoded_query = urllib.parse.quote(query)
+    url = f"https://news.google.com/rss/search?q={encoded_query}&hl=ko&gl=KR&ceid=KR:ko"
 
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
-        if resp.status_code == 401:
+        feed = feedparser.parse(url)
+        if feed.bozo and not feed.entries:
             logger.warning(
-                "[네이버뉴스] Naver API 인증 실패 (401 Unauthorized - Client ID/Secret 확인 필요)"
+                f"[증권뉴스] RSS 파싱 실패 또는 빈 결과: {feed.get('bozo_exception')}"
             )
-            return text + "  (Naver API 인증 실패)"
-        if resp.status_code == 403:
-            logger.warning(
-                "[네이버뉴스] Naver API 접근 거부 (403 Forbidden - 권한 또는 일일 한도 초과)"
-            )
-            return text + "  (Naver API 접근 거부)"
-        resp.raise_for_status()
-
-        data = resp.json()
-        items = data.get("items", [])
+            return text + "  뉴스를 가져올 수 없습니다."
 
         headlines: list[str] = []
         seen_titles: set[str] = set()
 
-        for item in items:
+        for item in feed.entries:
             title = _clean_text(item.get("title", ""))
-            summary = _clean_text(item.get("description", ""))
-            link = item.get("originallink") or item.get("link", "")
+            summary = _clean_text(item.get("summary", item.get("description", "")))
+            link = item.get("link", "")
 
             if not title or not link or len(title) < 5:
                 continue
@@ -151,16 +126,19 @@ def collect_naver_finance_news() -> str:
 
         if headlines:
             text += "\n".join(headlines)
-            logger.info(f"[네이버증권] 뉴스 {len(headlines)}건 수집 완료")
+            logger.info(f"[증권뉴스] 뉴스 {len(headlines)}건 수집 완료")
         else:
             text += "  뉴스를 가져올 수 없습니다."
-            logger.warning("[네이버증권] 수집된 뉴스가 없습니다.")
+            logger.warning("[증권뉴스] 수집된 뉴스가 없습니다.")
 
     except Exception as e:
-        logger.error(f"[네이버증권] 뉴스 수집 실패: {e}")
+        logger.error(f"[증권뉴스] 뉴스 수집 실패: {e}")
         text += f"  뉴스 수집 실패: {e}"
 
     return text
+
+
+collect_naver_finance_news = collect_stock_news
 
 
 def collect_all_stocks() -> str:
@@ -168,5 +146,5 @@ def collect_all_stocks() -> str:
     parts = []
     parts.append(collect_index_data())
     parts.append(collect_korean_market())
-    parts.append(collect_naver_finance_news())
+    parts.append(collect_stock_news())
     return "\n".join(parts)

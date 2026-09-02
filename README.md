@@ -21,7 +21,8 @@
 |--------|-----------|
 | Discord Webhook URL | 서버 설정 → 연동 → 웹훅 → 새 웹훅 → URL 복사 |
 | Google Gemini API Key | https://aistudio.google.com 가입 후 API 키 발급 |
-| Naver Open API (Client ID / Secret) | [네이버 개발자 센터](https://developers.naver.com) 로그인 → **Application** → **애플리케이션 등록** → 사용 API: **검색** 선택 → 환경: WEB 설정 (URL: `http://localhost`) → 생성 후 Client ID / Secret 복사 |
+
+> 💡 뉴스 및 증시 수집은 Google News RSS 및 무료 피드를 사용하므로 별도의 포털/검색 API 키가 필요하지 않습니다.
 
 ### 2. 환경변수 및 모델 커스텀 설정
 
@@ -30,8 +31,6 @@
 #### 필수 환경변수
 - `DISCORD_WEBHOOK_MAIN`: Discord Webhook URL (단일 채널 전송 시) 또는 카테고리별 웹훅 URL (`DISCORD_WEBHOOK_WEATHER`, `DISCORD_WEBHOOK_STOCKS`, `DISCORD_WEBHOOK_IT_NEWS`, `DISCORD_WEBHOOK_CIVIL_SERVICE`)
 - `GEMINI_API_KEY`: Google Gemini API 키
-- `NAVER_CLIENT_ID`: Naver Open API Client ID
-- `NAVER_CLIENT_SECRET`: Naver Open API Client Secret
 
 #### 카테고리별 Gemini 모델 커스텀 (선택)
 카테고리별로 원하는 Gemini 모델을 환경변수로 지정할 수 있으며, 미지정 시 기본 모델이 적용됩니다.
@@ -66,8 +65,6 @@ python main.py
    - **필수**:
      - `DISCORD_WEBHOOK_MAIN` (또는 카테고리별 `DISCORD_WEBHOOK_*`)
      - `GEMINI_API_KEY`
-     - `NAVER_CLIENT_ID`
-     - `NAVER_CLIENT_SECRET`
    - **선택 (모델 커스텀)**:
      - `GEMINI_MODEL_WEATHER`, `GEMINI_MODEL_STOCKS`, `GEMINI_MODEL_IT_NEWS`, `GEMINI_MODEL_CIVIL_SERVICE`
 4. 매일 KST 07:00에 자동 실행됨
@@ -80,6 +77,6 @@ python main.py
 - Discord Webhook (봇 토큰 불필요)
 - Google Gemini API (`gemini-2.0-flash`, `gemini-2.5-pro`)
 - Open-Meteo API (날씨 예보 및 미세먼지 대기질)
-- Naver Open API (증시 시황 및 공무원 뉴스 검색)
+- Google News RSS (증시 시황 및 공무원 뉴스 검색, API 키 불필요)
 - yfinance + FinanceDataReader (주식 지수 및 시세)
 - RSS Feed (GeekNews, 요즘IT, TechCrunch, 44bits 등 IT 뉴스)

@@ -23,10 +23,6 @@ class Config:
     GEMINI_MODEL_CIVIL_SERVICE = os.getenv("GEMINI_MODEL_CIVIL_SERVICE", "gemini-2.5-pro")
     GEMINI_MODEL_FALLBACK = os.getenv("GEMINI_MODEL_FALLBACK", "gemini-2.0-flash")
 
-    # Naver Open API
-    NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "")
-    NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "")
-
     # 날씨 지역 설정
     WEATHER_LOCATIONS = [
         {"name": "경산 중방동", "query": "경산 중방동 날씨"},

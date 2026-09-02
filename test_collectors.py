@@ -44,10 +44,10 @@ def test_weather():
 
 def test_stocks():
     print("\n" + "=" * 50)
-    print("📈  [2/4] 주식 동향 수집 테스트 (yfinance + Naver Open API)")
+    print("📈  [2/4] 주식 동향 수집 테스트 (yfinance + Google News RSS)")
     print("=" * 50)
     try:
-        from collectors.stocks import collect_index_data, collect_naver_finance_news
+        from collectors.stocks import collect_index_data, collect_stock_news
 
         print("📊 주요 지수 수집 중...")
         idx = collect_index_data()
@@ -55,10 +55,8 @@ def test_stocks():
 
         time.sleep(1)
 
-        print("📰 네이버 증권 뉴스 수집 (Naver Open API)...")
-        if not Config.NAVER_CLIENT_ID or not Config.NAVER_CLIENT_SECRET:
-            print("  ℹ️ Naver API 키 미설정: .env에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 필요")
-        news = collect_naver_finance_news()
+        print("📰 증권 뉴스 수집 (Google News RSS)...")
+        news = collect_stock_news()
         lines = news.strip().splitlines()
         for line in lines[:8]:
             if line.strip():
@@ -94,19 +92,16 @@ def test_it_news():
 
 def test_civil_service():
     print("\n" + "=" * 50)
-    print("🏛️  [4/4] 공무원 뉴스 수집 테스트 (Naver Open API)")
+    print("🏛️  [4/4] 공무원 뉴스 수집 테스트 (Google News RSS)")
     print("=" * 50)
     try:
-        from collectors.civil_service import search_naver_news
-
-        if not Config.NAVER_CLIENT_ID or not Config.NAVER_CLIENT_SECRET:
-            print("  ℹ️ Naver API 키 미설정: .env에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 필요")
+        from collectors.civil_service import search_civil_service_news
 
         for kw in ["공무원 정책", "전산직 공무원", "사회복지직"]:
             print(f"\n🔍 키워드: '{kw}' 검색...")
-            articles = search_naver_news(kw, count=3)
+            articles = search_civil_service_news(kw, count=3)
             if not articles:
-                print("    (기사 없음 또는 Naver API 키 미설정)")
+                print("    (기사 없음 또는 RSS 파싱 실패)")
             else:
                 for a in articles:
                     print(f"  • {a['title'][:60]}...")
@@ -119,11 +114,6 @@ def test_civil_service():
 
 def print_env_status():
     """현재 로드된 주요 환경변수 설정 상태를 출력합니다."""
-    naver_ok = (
-        "✅ 설정됨"
-        if (Config.NAVER_CLIENT_ID and Config.NAVER_CLIENT_SECRET)
-        else "❌ 미설정 (선택/뉴스 검색)"
-    )
     gemini_ok = "✅ 설정됨" if Config.GEMINI_API_KEY else "❌ 미설정 (브리핑 실행 시 필수)"
     discord_ok = "✅ 설정됨" if Config.DISCORD_WEBHOOK_MAIN else "❌ 미설정 (브리핑 실행 시 필수)"
 
@@ -135,12 +125,11 @@ def print_env_status():
     print(f"    - IT뉴스 모델     : {Config.GEMINI_MODEL_IT_NEWS}")
     print(f"    - 공무원뉴스 모델 : {Config.GEMINI_MODEL_CIVIL_SERVICE}")
     print(f"    - 폴백 모델       : {Config.GEMINI_MODEL_FALLBACK}")
-    print(f"  • Naver Open API  : {naver_ok}")
 
 
 if __name__ == "__main__":
     print("🚀 모닝브리핑 봇 - 수집기 테스트 시작")
-    print("(API 키 없이도 날씨/주식 지수/IT RSS는 기본 수집 가능)")
+    print("(모든 수집기는 별도 검색 API 키 없이 무료 RSS/오픈소스로 동작)")
     print("-" * 50)
     print_env_status()
 
@@ -164,9 +153,5 @@ if __name__ == "__main__":
     print(f"       • GEMINI_MODEL_IT_NEWS={Config.GEMINI_MODEL_IT_NEWS} (기본: gemini-2.5-pro)")
     print(f"       • GEMINI_MODEL_CIVIL_SERVICE={Config.GEMINI_MODEL_CIVIL_SERVICE} (기본: gemini-2.5-pro)")
     print(f"       • GEMINI_MODEL_FALLBACK={Config.GEMINI_MODEL_FALLBACK} (기본: gemini-2.0-flash)")
-    print("  3. [권장] Naver Open API 설정 (증권 시황 및 공무원 뉴스 검색용):")
-    print("     - NAVER_CLIENT_ID=<네이버_개발자센터_Client_ID>")
-    print("     - NAVER_CLIENT_SECRET=<네이버_개발자센터_Client_Secret>")
-    print("     * 미설정 시에도 날씨, 주식 지수, IT 뉴스는 정상 수집됩니다.")
-    print("  4. [실행] 전체 모닝 브리핑 실행:")
+    print("  3. [실행] 전체 모닝 브리핑 실행:")
     print("     - python main.py (또는 py main.py)")
