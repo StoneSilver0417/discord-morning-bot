@@ -17,11 +17,11 @@ class Config:
 
     # Gemini
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL_WEATHER = os.getenv("GEMINI_MODEL_WEATHER") or "gemini-2.5-flash"
-    GEMINI_MODEL_STOCKS = os.getenv("GEMINI_MODEL_STOCKS") or "gemini-2.5-flash"
-    GEMINI_MODEL_IT_NEWS = os.getenv("GEMINI_MODEL_IT_NEWS") or "gemini-2.5-flash"
-    GEMINI_MODEL_CIVIL_SERVICE = os.getenv("GEMINI_MODEL_CIVIL_SERVICE") or "gemini-2.5-flash"
-    GEMINI_MODEL_FALLBACK = os.getenv("GEMINI_MODEL_FALLBACK") or "gemini-2.5-flash"
+    GEMINI_MODEL_WEATHER = os.getenv("GEMINI_MODEL_WEATHER") or "gemini-3.6-flash"
+    GEMINI_MODEL_STOCKS = os.getenv("GEMINI_MODEL_STOCKS") or "gemini-3.6-flash"
+    GEMINI_MODEL_IT_NEWS = os.getenv("GEMINI_MODEL_IT_NEWS") or "gemini-3.6-flash"
+    GEMINI_MODEL_CIVIL_SERVICE = os.getenv("GEMINI_MODEL_CIVIL_SERVICE") or "gemini-3.6-flash"
+    GEMINI_MODEL_FALLBACK = os.getenv("GEMINI_MODEL_FALLBACK") or "gemini-3.6-flash"
 
     # 날씨 지역 설정
     WEATHER_LOCATIONS = [
@@ -84,4 +84,4 @@ class Config:
         fallback = cls.GEMINI_MODEL_FALLBACK
         if isinstance(fallback, str) and fallback.strip():
             return fallback.strip()
-        return "gemini-2.5-flash"
+        return "gemini-3.6-flash"
