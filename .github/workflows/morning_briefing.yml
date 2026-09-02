@@ -41,4 +41,5 @@ jobs:
           GEMINI_MODEL_STOCKS: ${{ secrets.GEMINI_MODEL_STOCKS }}
           GEMINI_MODEL_IT_NEWS: ${{ secrets.GEMINI_MODEL_IT_NEWS }}
           GEMINI_MODEL_CIVIL_SERVICE: ${{ secrets.GEMINI_MODEL_CIVIL_SERVICE }}
+          GEMINI_MODEL_FALLBACK: ${{ secrets.GEMINI_MODEL_FALLBACK }}
         run: python main.py

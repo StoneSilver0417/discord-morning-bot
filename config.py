@@ -17,11 +17,11 @@ class Config:
 
     # Gemini
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL_WEATHER = os.getenv("GEMINI_MODEL_WEATHER", "gemini-2.0-flash")
-    GEMINI_MODEL_STOCKS = os.getenv("GEMINI_MODEL_STOCKS", "gemini-2.0-flash")
-    GEMINI_MODEL_IT_NEWS = os.getenv("GEMINI_MODEL_IT_NEWS", "gemini-2.5-pro")
-    GEMINI_MODEL_CIVIL_SERVICE = os.getenv("GEMINI_MODEL_CIVIL_SERVICE", "gemini-2.5-pro")
-    GEMINI_MODEL_FALLBACK = os.getenv("GEMINI_MODEL_FALLBACK", "gemini-2.0-flash")
+    GEMINI_MODEL_WEATHER = os.getenv("GEMINI_MODEL_WEATHER") or "gemini-2.0-flash"
+    GEMINI_MODEL_STOCKS = os.getenv("GEMINI_MODEL_STOCKS") or "gemini-2.0-flash"
+    GEMINI_MODEL_IT_NEWS = os.getenv("GEMINI_MODEL_IT_NEWS") or "gemini-2.5-pro"
+    GEMINI_MODEL_CIVIL_SERVICE = os.getenv("GEMINI_MODEL_CIVIL_SERVICE") or "gemini-2.5-pro"
+    GEMINI_MODEL_FALLBACK = os.getenv("GEMINI_MODEL_FALLBACK") or "gemini-2.0-flash"
 
     # 날씨 지역 설정
     WEATHER_LOCATIONS = [
@@ -77,5 +77,11 @@ class Config:
             "it_news": cls.GEMINI_MODEL_IT_NEWS,
             "civil_service": cls.GEMINI_MODEL_CIVIL_SERVICE,
         }
-        normalized = (category or "").lower().replace("-", "_")
-        return mapping.get(normalized, cls.GEMINI_MODEL_FALLBACK)
+        normalized = (category or "").lower().replace("-", "_").strip()
+        model = mapping.get(normalized)
+        if isinstance(model, str) and model.strip():
+            return model.strip()
+        fallback = cls.GEMINI_MODEL_FALLBACK
+        if isinstance(fallback, str) and fallback.strip():
+            return fallback.strip()
+        return "gemini-2.0-flash"

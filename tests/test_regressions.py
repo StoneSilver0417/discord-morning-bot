@@ -551,6 +551,49 @@ class RegressionTests(unittest.TestCase):
             sleep_args = [call.args[0] for call in mock_sleep.call_args_list]
             self.assertEqual(3, sleep_args.count(35))
 
+    def test_empty_model_env_vars_fallback_to_defaults(self):
+        import importlib
+        import os
+        import config
+
+        empty_env = {
+            "GEMINI_MODEL_WEATHER": "",
+            "GEMINI_MODEL_STOCKS": "",
+            "GEMINI_MODEL_IT_NEWS": "",
+            "GEMINI_MODEL_CIVIL_SERVICE": "",
+            "GEMINI_MODEL_FALLBACK": "",
+        }
+        with patch.dict(os.environ, empty_env, clear=False):
+            reloaded_config = importlib.reload(config)
+            cfg = reloaded_config.Config
+            self.assertEqual("gemini-2.0-flash", cfg.GEMINI_MODEL_WEATHER)
+            self.assertEqual("gemini-2.0-flash", cfg.GEMINI_MODEL_STOCKS)
+            self.assertEqual("gemini-2.5-pro", cfg.GEMINI_MODEL_IT_NEWS)
+            self.assertEqual("gemini-2.5-pro", cfg.GEMINI_MODEL_CIVIL_SERVICE)
+            self.assertEqual("gemini-2.0-flash", cfg.GEMINI_MODEL_FALLBACK)
+            self.assertEqual("gemini-2.0-flash", cfg.get_model_for_category("weather"))
+            self.assertEqual("gemini-2.0-flash", cfg.get_model_for_category("stocks"))
+            self.assertEqual("gemini-2.5-pro", cfg.get_model_for_category("it_news"))
+            self.assertEqual("gemini-2.5-pro", cfg.get_model_for_category("civil_service"))
+
+        importlib.reload(config)
+
+    def test_get_model_for_category_never_returns_empty_or_whitespace(self):
+        from config import Config
+
+        with (
+            patch.object(Config, "GEMINI_MODEL_WEATHER", ""),
+            patch.object(Config, "GEMINI_MODEL_STOCKS", "   "),
+            patch.object(Config, "GEMINI_MODEL_IT_NEWS", None),
+            patch.object(Config, "GEMINI_MODEL_CIVIL_SERVICE", ""),
+            patch.object(Config, "GEMINI_MODEL_FALLBACK", "  "),
+        ):
+            for cat in ["weather", "stocks", "it_news", "civil_service", "", "  ", None, "unknown_category"]:
+                model = Config.get_model_for_category(cat)
+                self.assertTrue(bool(model))
+                self.assertTrue(bool(model.strip()))
+                self.assertEqual(model, model.strip())
+
 
 if __name__ == "__main__":
     unittest.main()
