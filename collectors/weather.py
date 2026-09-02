@@ -53,14 +53,31 @@ def get_weather_condition(code: int) -> str:
     return "비/눈"
 
 
+def _fetch_open_meteo(url: str, timeout: int = 10, retries: int = 2) -> requests.Response:
+    """Open-Meteo API 호출을 수행하며 일시 오류 시 재시도합니다."""
+    import time
+    last_err = None
+    for attempt in range(retries):
+        try:
+            resp = requests.get(url, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except Exception as e:
+            last_err = e
+            if attempt < retries - 1:
+                time.sleep(1)
+    if last_err:
+        raise last_err
+    raise RuntimeError(f"Open-Meteo 호출 실패: {url}")
+
+
 def collect_air_quality(lat: float, lon: float) -> dict:
     """Open-Meteo Air Quality API로 미세먼지(PM10) 및 초미세먼지(PM2.5)를 수집합니다."""
     url = (
         f"https://air-quality-api.open-meteo.com/v1/air-quality"
         f"?latitude={lat}&longitude={lon}&current=pm10,pm2_5&timezone=Asia/Seoul"
     )
-    resp = requests.get(url, timeout=10)
-    resp.raise_for_status()
+    resp = _fetch_open_meteo(url, timeout=10)
     result = resp.json()
     current = result.get("current", {})
 
@@ -107,8 +124,7 @@ def collect_weather(location_name: str) -> dict:
             f"&start_date={today_str}&end_date={today_str}"
         )
 
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
+        resp = _fetch_open_meteo(url, timeout=10)
         result = resp.json()
 
         daily = result.get("daily", {})

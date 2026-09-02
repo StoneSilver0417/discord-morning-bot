@@ -169,6 +169,18 @@ def process_with_gemini(category: str, raw_data: str) -> str:
                     contents=prompt_contents,
                     config=gen_config,
                 )
+            elif _is_transient_error(primary_err):
+                logger.warning(
+                    f"[{category}] 모델 '{primary_model}' 일시적 과부하 발생 ({primary_err}) - "
+                    "2초 후 1회 재시도합니다."
+                )
+                import time
+                time.sleep(2)
+                response = client.models.generate_content(
+                    model=primary_model,
+                    contents=prompt_contents,
+                    config=gen_config,
+                )
             else:
                 raise primary_err
 
