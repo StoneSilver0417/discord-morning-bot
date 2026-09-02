@@ -439,7 +439,7 @@ class RegressionTests(unittest.TestCase):
 
         process_with_gemini("weather", "날씨 원문")
         mocked_client.return_value.models.generate_content.assert_called_with(
-            model="gemini-3.6-flash",
+            model="gemini-2.5-flash",
             contents=unittest.mock.ANY,
             config=unittest.mock.ANY,
         )
@@ -450,12 +450,13 @@ class RegressionTests(unittest.TestCase):
             "2. 기사2\n→ 요약2\n🔗 https://example.com/2\n"
             "3. 기사3\n→ 요약3\n🔗 https://example.com/3"
         )
-        process_with_gemini("it_news", "IT뉴스 원문")
-        mocked_client.return_value.models.generate_content.assert_called_with(
-            model="gemini-3.1-pro-preview",
-            contents=unittest.mock.ANY,
-            config=unittest.mock.ANY,
-        )
+        with patch.object(main.Config, "GEMINI_MODEL_IT_NEWS", "gemini-2.5-pro"):
+            process_with_gemini("it_news", "IT뉴스 원문")
+            mocked_client.return_value.models.generate_content.assert_called_with(
+                model="gemini-2.5-pro",
+                contents=unittest.mock.ANY,
+                config=unittest.mock.ANY,
+            )
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
@@ -470,17 +471,49 @@ class RegressionTests(unittest.TestCase):
             SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
         ]
         mocked_client.return_value.models.generate_content.side_effect = [
-            RuntimeError("404 Not Found: models/gemini-3.1-pro-preview is not found"),
+            RuntimeError("404 Not Found: models/gemini-2.5-pro is not found"),
             response,
         ]
 
-        result = process_with_gemini("it_news", "IT뉴스 원문")
+        with patch.object(main.Config, "GEMINI_MODEL_IT_NEWS", "gemini-2.5-pro"):
+            result = process_with_gemini("it_news", "IT뉴스 원문")
         self.assertIn("1. 기사1", result)
         self.assertEqual(2, mocked_client.return_value.models.generate_content.call_count)
         first_call = mocked_client.return_value.models.generate_content.call_args_list[0]
         second_call = mocked_client.return_value.models.generate_content.call_args_list[1]
-        self.assertEqual("gemini-3.1-pro-preview", first_call.kwargs["model"])
-        self.assertEqual("gemini-3.6-flash", second_call.kwargs["model"])
+        self.assertEqual("gemini-2.5-pro", first_call.kwargs["model"])
+        self.assertEqual("gemini-2.5-flash", second_call.kwargs["model"])
+
+    @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
+    @patch("processors.gemini_processor.genai.Client")
+    def test_gemini_fallback_on_429(self, mocked_client):
+        response = Mock()
+        response.text = (
+            "1. [보안] 기사1\n"
+            "   • 내용 요약: 핵심 내용 요약1\n"
+            "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향1\n"
+            "   🔗 https://example.com/1\n"
+            "2. [클라우드] 기사2\n"
+            "   • 내용 요약: 핵심 내용 요약2\n"
+            "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향2\n"
+            "   🔗 https://example.com/2"
+        )
+        response.candidates = [
+            SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
+        ]
+        mocked_client.return_value.models.generate_content.side_effect = [
+            RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded"),
+            response,
+        ]
+
+        with patch.object(main.Config, "GEMINI_MODEL_IT_NEWS", "gemini-2.5-pro"):
+            result = process_with_gemini("it_news", "IT뉴스 원문")
+        self.assertEqual(response.text, result)
+        self.assertEqual(2, mocked_client.return_value.models.generate_content.call_count)
+        first_call = mocked_client.return_value.models.generate_content.call_args_list[0]
+        second_call = mocked_client.return_value.models.generate_content.call_args_list[1]
+        self.assertEqual("gemini-2.5-pro", first_call.kwargs["model"])
+        self.assertEqual("gemini-2.5-flash", second_call.kwargs["model"])
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
@@ -542,8 +575,14 @@ class RegressionTests(unittest.TestCase):
     def test_is_model_not_found_detection(self):
         from processors.gemini_processor import _is_model_not_found
         self.assertTrue(_is_model_not_found(RuntimeError("404 Not Found: model is not found")))
-        self.assertTrue(_is_model_not_found(Exception("models/gemini-3.1-pro-preview is not supported")))
+        self.assertTrue(_is_model_not_found(Exception("models/gemini-2.5-pro is not supported")))
         self.assertFalse(_is_model_not_found(RuntimeError("500 Internal Server Error")))
+
+    def test_is_quota_exhausted_detection(self):
+        from processors.gemini_processor import _is_quota_exhausted
+        self.assertTrue(_is_quota_exhausted(RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded")))
+        self.assertTrue(_is_quota_exhausted(Exception("ResourceExhausted: Quota exceeded for metric")))
+        self.assertFalse(_is_quota_exhausted(RuntimeError("500 Internal Server Error")))
 
     @patch("main.time.sleep")
     @patch("main.send_multiple_embeds", return_value=True)
@@ -581,15 +620,15 @@ class RegressionTests(unittest.TestCase):
         with patch.dict(os.environ, empty_env, clear=False):
             reloaded_config = importlib.reload(config)
             cfg = reloaded_config.Config
-            self.assertEqual("gemini-3.6-flash", cfg.GEMINI_MODEL_WEATHER)
-            self.assertEqual("gemini-3.6-flash", cfg.GEMINI_MODEL_STOCKS)
-            self.assertEqual("gemini-3.1-pro-preview", cfg.GEMINI_MODEL_IT_NEWS)
-            self.assertEqual("gemini-3.1-pro-preview", cfg.GEMINI_MODEL_CIVIL_SERVICE)
-            self.assertEqual("gemini-3.6-flash", cfg.GEMINI_MODEL_FALLBACK)
-            self.assertEqual("gemini-3.6-flash", cfg.get_model_for_category("weather"))
-            self.assertEqual("gemini-3.6-flash", cfg.get_model_for_category("stocks"))
-            self.assertEqual("gemini-3.1-pro-preview", cfg.get_model_for_category("it_news"))
-            self.assertEqual("gemini-3.1-pro-preview", cfg.get_model_for_category("civil_service"))
+            self.assertEqual("gemini-2.5-flash", cfg.GEMINI_MODEL_WEATHER)
+            self.assertEqual("gemini-2.5-flash", cfg.GEMINI_MODEL_STOCKS)
+            self.assertEqual("gemini-2.5-flash", cfg.GEMINI_MODEL_IT_NEWS)
+            self.assertEqual("gemini-2.5-flash", cfg.GEMINI_MODEL_CIVIL_SERVICE)
+            self.assertEqual("gemini-2.5-flash", cfg.GEMINI_MODEL_FALLBACK)
+            self.assertEqual("gemini-2.5-flash", cfg.get_model_for_category("weather"))
+            self.assertEqual("gemini-2.5-flash", cfg.get_model_for_category("stocks"))
+            self.assertEqual("gemini-2.5-flash", cfg.get_model_for_category("it_news"))
+            self.assertEqual("gemini-2.5-flash", cfg.get_model_for_category("civil_service"))
 
         importlib.reload(config)
 

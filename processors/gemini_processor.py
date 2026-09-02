@@ -155,7 +155,11 @@ def process_with_gemini(category: str, raw_data: str) -> str:
                 config=gen_config,
             )
         except Exception as primary_err:
-            if primary_model != fallback_model and _is_model_not_found(primary_err):
+            if primary_model != fallback_model and (
+                _is_quota_exhausted(primary_err)
+                or _is_model_not_found(primary_err)
+                or _is_transient_error(primary_err)
+            ):
                 logger.warning(
                     f"[{category}] 모델 '{primary_model}' 오류 발생 ({primary_err}) - "
                     f"폴백 모델 '{fallback_model}'로 1회 재시도합니다."
