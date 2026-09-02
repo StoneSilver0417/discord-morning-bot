@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-09-02
+
+### 장애 조사 및 수정
+- `it_news`와 `civil_service` 기본 모델이 Pro 모델(`gemini-3.1-pro-preview`)로 설정되어 있어 Google AI Studio 무료 티어 할당량(429 RESOURCE_EXHAUSTED) 초과로 요약 대신 원문이 전송되던 문제 해결
+- `config.py`: 모든 카테고리(`weather`, `stocks`, `it_news`, `civil_service`)의 기본 모델 및 폴백 모델을 안정적이고 무료 티어 할당량이 넉넉한 `gemini-3.6-flash`로 통일 (사용자가 환경변수로 Pro 모델 등 커스텀 오버라이드 가능 유지)
+- `processors/gemini_processor.py`: 기본 모델 호출 시 429(할당량 초과), 404(미지원/Not Found), 503(일시적 과부하) 발생 시 폴백 모델(`gemini-3.6-flash`)로 1회 즉시 재시도하도록 보완하여 3~5개 기사 상세 요약 생성 보장
+- `collectors/weather.py`: Open-Meteo API 호출 시 간헐적 503 오류 대비 재시도 로직(`_fetch_open_meteo`) 추가
+- `tests/test_regressions.py`: 429 할당량 오류 폴백 재시도 및 3~5개 선별 요약 회귀 테스트 추가/갱신 (39개 테스트 통과)
+- GitHub Actions 수동 실행(`33585561823`)으로 4개 카테고리 전체 Gemini 가공 및 Discord 웹훅 전송 성공 검증 완료
+
+
 ## 2026-07-23
 
 ### 장애 조사 및 수정
