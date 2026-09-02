@@ -439,7 +439,7 @@ class RegressionTests(unittest.TestCase):
 
         process_with_gemini("weather", "날씨 원문")
         mocked_client.return_value.models.generate_content.assert_called_with(
-            model="gemini-2.0-flash",
+            model="gemini-3.6-flash",
             contents=unittest.mock.ANY,
             config=unittest.mock.ANY,
         )
@@ -452,7 +452,7 @@ class RegressionTests(unittest.TestCase):
         )
         process_with_gemini("it_news", "IT뉴스 원문")
         mocked_client.return_value.models.generate_content.assert_called_with(
-            model="gemini-2.5-pro",
+            model="gemini-3.1-pro-preview",
             contents=unittest.mock.ANY,
             config=unittest.mock.ANY,
         )
@@ -470,7 +470,7 @@ class RegressionTests(unittest.TestCase):
             SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
         ]
         mocked_client.return_value.models.generate_content.side_effect = [
-            RuntimeError("404 Not Found: models/gemini-2.5-pro is not found"),
+            RuntimeError("404 Not Found: models/gemini-3.1-pro-preview is not found"),
             response,
         ]
 
@@ -479,8 +479,8 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(2, mocked_client.return_value.models.generate_content.call_count)
         first_call = mocked_client.return_value.models.generate_content.call_args_list[0]
         second_call = mocked_client.return_value.models.generate_content.call_args_list[1]
-        self.assertEqual("gemini-2.5-pro", first_call.kwargs["model"])
-        self.assertEqual("gemini-2.0-flash", second_call.kwargs["model"])
+        self.assertEqual("gemini-3.1-pro-preview", first_call.kwargs["model"])
+        self.assertEqual("gemini-3.6-flash", second_call.kwargs["model"])
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
@@ -527,7 +527,7 @@ class RegressionTests(unittest.TestCase):
     def test_is_model_not_found_detection(self):
         from processors.gemini_processor import _is_model_not_found
         self.assertTrue(_is_model_not_found(RuntimeError("404 Not Found: model is not found")))
-        self.assertTrue(_is_model_not_found(Exception("models/gemini-2.5-pro is not supported")))
+        self.assertTrue(_is_model_not_found(Exception("models/gemini-3.1-pro-preview is not supported")))
         self.assertFalse(_is_model_not_found(RuntimeError("500 Internal Server Error")))
 
     @patch("main.time.sleep")
@@ -566,15 +566,15 @@ class RegressionTests(unittest.TestCase):
         with patch.dict(os.environ, empty_env, clear=False):
             reloaded_config = importlib.reload(config)
             cfg = reloaded_config.Config
-            self.assertEqual("gemini-2.0-flash", cfg.GEMINI_MODEL_WEATHER)
-            self.assertEqual("gemini-2.0-flash", cfg.GEMINI_MODEL_STOCKS)
-            self.assertEqual("gemini-2.5-pro", cfg.GEMINI_MODEL_IT_NEWS)
-            self.assertEqual("gemini-2.5-pro", cfg.GEMINI_MODEL_CIVIL_SERVICE)
-            self.assertEqual("gemini-2.0-flash", cfg.GEMINI_MODEL_FALLBACK)
-            self.assertEqual("gemini-2.0-flash", cfg.get_model_for_category("weather"))
-            self.assertEqual("gemini-2.0-flash", cfg.get_model_for_category("stocks"))
-            self.assertEqual("gemini-2.5-pro", cfg.get_model_for_category("it_news"))
-            self.assertEqual("gemini-2.5-pro", cfg.get_model_for_category("civil_service"))
+            self.assertEqual("gemini-3.6-flash", cfg.GEMINI_MODEL_WEATHER)
+            self.assertEqual("gemini-3.6-flash", cfg.GEMINI_MODEL_STOCKS)
+            self.assertEqual("gemini-3.1-pro-preview", cfg.GEMINI_MODEL_IT_NEWS)
+            self.assertEqual("gemini-3.1-pro-preview", cfg.GEMINI_MODEL_CIVIL_SERVICE)
+            self.assertEqual("gemini-3.6-flash", cfg.GEMINI_MODEL_FALLBACK)
+            self.assertEqual("gemini-3.6-flash", cfg.get_model_for_category("weather"))
+            self.assertEqual("gemini-3.6-flash", cfg.get_model_for_category("stocks"))
+            self.assertEqual("gemini-3.1-pro-preview", cfg.get_model_for_category("it_news"))
+            self.assertEqual("gemini-3.1-pro-preview", cfg.get_model_for_category("civil_service"))
 
         importlib.reload(config)
 

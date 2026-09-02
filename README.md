@@ -37,11 +37,11 @@
 
 | 환경변수 | 기본값 | 설명 |
 |----------|--------|------|
-| `GEMINI_MODEL_WEATHER` | `gemini-2.0-flash` | 날씨 브리핑 요약 모델 |
-| `GEMINI_MODEL_STOCKS` | `gemini-2.0-flash` | 주식/증시 동향 요약 모델 |
-| `GEMINI_MODEL_IT_NEWS` | `gemini-2.5-pro` | IT 뉴스 큐레이션 및 요약 모델 |
-| `GEMINI_MODEL_CIVIL_SERVICE` | `gemini-2.5-pro` | 공무원 뉴스 큐레이션 및 요약 모델 |
-| `GEMINI_MODEL_FALLBACK` | `gemini-2.0-flash` | 모델 호출 실패 시 대체(Fallback) 모델 |
+| `GEMINI_MODEL_WEATHER` | `gemini-3.6-flash` | 날씨 브리핑 요약 모델 |
+| `GEMINI_MODEL_STOCKS` | `gemini-3.6-flash` | 주식/증시 동향 요약 모델 |
+| `GEMINI_MODEL_IT_NEWS` | `gemini-3.1-pro-preview` | IT 뉴스 큐레이션 및 요약 모델 |
+| `GEMINI_MODEL_CIVIL_SERVICE` | `gemini-3.1-pro-preview` | 공무원 뉴스 큐레이션 및 요약 모델 |
+| `GEMINI_MODEL_FALLBACK` | `gemini-3.6-flash` | 모델 호출 실패 시 대체(Fallback) 모델 |
 
 ### 3. 로컬 실행
 
@@ -75,7 +75,7 @@ python main.py
 - Python 3.12
 - GitHub Actions (무료 cron)
 - Discord Webhook (봇 토큰 불필요)
-- Google Gemini API (`gemini-2.0-flash`, `gemini-2.5-pro`)
+- Google Gemini API (`gemini-3.6-flash`, `gemini-3.1-pro-preview`)
 - Open-Meteo API (날씨 예보 및 미세먼지 대기질)
 - Google News RSS (증시 시황 및 공무원 뉴스 검색, API 키 불필요)
 - yfinance + FinanceDataReader (주식 지수 및 시세)
