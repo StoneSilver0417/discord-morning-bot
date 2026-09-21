@@ -14,6 +14,7 @@ from processors.gemini_processor import process_with_gemini, add_windy_links
 from formatters.discord_formatter import create_embeds, send_multiple_embeds
 from utils.time_utils import get_kst_today_str
 from utils.logger import setup_logger
+from utils.article_store import NoFreshArticlesError
 
 logger = setup_logger("main")
 
@@ -67,6 +68,8 @@ def run_briefing():
     try:
         it_raw = collect_all_it_news()
         results["it_news"] = process_with_gemini("it_news", it_raw)
+    except NoFreshArticlesError:
+        logger.info("[it_news] 새로운 뉴스가 없어 디스코드 전송을 건너뜁니다.")
     except Exception as e:
         logger.error(f"IT뉴스 수집 실패: {e}")
         results["it_news"] = f"IT 뉴스를 가져올 수 없습니다. ({e})"
@@ -79,6 +82,8 @@ def run_briefing():
     try:
         civil_raw = collect_all_civil_service()
         results["civil_service"] = process_with_gemini("civil_service", civil_raw)
+    except NoFreshArticlesError:
+        logger.info("[civil_service] 새로운 뉴스가 없어 디스코드 전송을 건너뜁니다.")
     except Exception as e:
         logger.error(f"공무원뉴스 수집 실패: {e}")
         results["civil_service"] = f"공무원 관련 뉴스를 가져올 수 없습니다. ({e})"
@@ -88,11 +93,15 @@ def run_briefing():
     logger.info("📤 카테고리별 디스코드 전송 중...")
 
     # 매핑 설정 (카테고리: (텍스트, 웹훅URL, 제목))
+    webhook_settings = {
+        "weather": (Config.DISCORD_WEBHOOK_WEATHER, "🌤️ 기상 정보"),
+        "stocks": (Config.DISCORD_WEBHOOK_STOCKS, "📈 주식 및 금융 동향"),
+        "it_news": (Config.DISCORD_WEBHOOK_IT_NEWS, "💻 IT/기술 뉴스"),
+        "civil_service": (Config.DISCORD_WEBHOOK_CIVIL_SERVICE, "🏛️ 공무원 소식"),
+    }
     webhook_mapping = {
-        "weather": (results["weather"], Config.DISCORD_WEBHOOK_WEATHER, "🌤️ 기상 정보"),
-        "stocks": (results["stocks"], Config.DISCORD_WEBHOOK_STOCKS, "📈 주식 및 금융 동향"),
-        "it_news": (results["it_news"], Config.DISCORD_WEBHOOK_IT_NEWS, "💻 IT/기술 뉴스"),
-        "civil_service": (results["civil_service"], Config.DISCORD_WEBHOOK_CIVIL_SERVICE, "🏛️ 공무원 소식"),
+        key: (content, *webhook_settings[key])
+        for key, content in results.items()
     }
 
     delivery_failures = []

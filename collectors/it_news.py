@@ -1,10 +1,32 @@
 """IT 뉴스 수집기 - RSS + Hacker News API"""
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+
 import requests
 import feedparser
 from config import Config
+from utils.article_store import ArticleStore, NoFreshArticlesError, filter_fresh
 from utils.logger import setup_logger
 
 logger = setup_logger("it_news")
+ARTICLE_STORE_PATH = str(Path("data") / "article_store.json")
+
+
+def _get_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_published_at(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def collect_rss_feeds() -> list:
@@ -14,19 +36,30 @@ def collect_rss_feeds() -> list:
     for feed_info in Config.IT_NEWS_FEEDS:
         try:
             feed = feedparser.parse(feed_info["url"])
+            collected_count = 0
             for entry in feed.entries[:5]:
                 # HTML 태그 제거
                 summary_raw = entry.get("summary", "")
                 from bs4 import BeautifulSoup
                 summary_clean = BeautifulSoup(summary_raw, "html.parser").get_text(strip=True)
                 
+                published_at = _parse_published_at(
+                    entry.get("published", entry.get("pubDate", ""))
+                )
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "")
+                if not title or not link or published_at is None:
+                    continue
+
                 articles.append({
                     "source": feed_info["name"],
-                    "title": entry.get("title", "").strip(),
-                    "link": entry.get("link", ""),
+                    "title": title,
+                    "link": link,
                     "summary": summary_clean[:200],
+                    "published_at": published_at,
                 })
-            logger.info(f"[RSS] {feed_info['name']}: {min(5, len(feed.entries))}건 수집")
+                collected_count += 1
+            logger.info(f"[RSS] {feed_info['name']}: {collected_count}건 수집")
         except Exception as e:
             logger.warning(f"[RSS] {feed_info['name']} 실패: {e}")
 
@@ -49,12 +82,15 @@ def collect_hackernews() -> list:
                     f"https://hacker-news.firebaseio.com/v0/item/{sid}.json",
                     timeout=5,
                 ).json()
-                if item and item.get("title"):
+                if item and item.get("title") and item.get("time") is not None:
                     articles.append({
                         "source": "HackerNews",
                         "title": item["title"],
                         "link": item.get("url", f"https://news.ycombinator.com/item?id={sid}"),
                         "summary": f"Points: {item.get('score', 0)}, Comments: {item.get('descendants', 0)}",
+                        "published_at": datetime.fromtimestamp(
+                            item["time"], tz=timezone.utc
+                        ),
                     })
             except Exception:
                 continue
@@ -74,7 +110,19 @@ def collect_all_it_news() -> str:
     all_articles = rss_articles + hn_articles
 
     if not all_articles:
-        raise RuntimeError("모든 IT 뉴스 소스에서 수집 결과가 비어 있습니다.")
+        raise NoFreshArticlesError("새로운 IT 뉴스가 없습니다.")
+
+    dated_articles = [article for article in all_articles if "published_at" in article]
+    if dated_articles:
+        now = _get_now()
+        store = ArticleStore(ARTICLE_STORE_PATH)
+        store.prune(now=now)
+        all_articles = filter_fresh(dated_articles, store, "it_news", now=now)
+        if not all_articles:
+            raise NoFreshArticlesError("새로운 IT 뉴스가 없습니다.")
+        for article in all_articles:
+            store.mark_seen("it_news", article["link"], now)
+        store.save()
 
     # 요약 실패 시를 대비해 전체 기사 중 상위 10개만 텍스트로 만듦 (링크 위주)
     display_articles = all_articles[:10]

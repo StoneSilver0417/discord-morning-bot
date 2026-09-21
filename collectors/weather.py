@@ -2,7 +2,7 @@
 import requests
 from config import Config
 from utils.logger import setup_logger
-from utils.time_utils import get_kst_now
+from utils import time_utils
 
 logger = setup_logger("weather")
 
@@ -108,7 +108,7 @@ def collect_weather(location_name: str) -> dict:
     """Open-Meteo API를 사용하여 특정 지역의 종합 날씨 정보를 수집합니다."""
     data = {"location": location_name, "source": "open-meteo"}
     coord = COORDINATES.get(location_name, COORDINATES["경산 중방동"])
-    today_str = get_kst_now().strftime("%Y-%m-%d")
+    today_str = time_utils.get_kst_now().strftime("%Y-%m-%d")
 
     try:
         url = (

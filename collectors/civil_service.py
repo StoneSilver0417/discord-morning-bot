@@ -2,11 +2,33 @@
 import html
 import re
 import urllib.parse
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+
 import feedparser
 from config import Config
+from utils.article_store import ArticleStore, NoFreshArticlesError, filter_fresh
 from utils.logger import setup_logger
 
 logger = setup_logger("civil_service")
+ARTICLE_STORE_PATH = str(Path("data") / "article_store.json")
+
+
+def _get_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_published_at(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _clean_text(raw_text: str) -> str:
@@ -37,8 +59,9 @@ def search_civil_service_news(keyword: str, count: int = 10) -> list[dict]:
             summary = _clean_text(entry.get("summary", entry.get("description", "")))
             link = entry.get("link", "")
             pub_date = entry.get("published", entry.get("pubDate", ""))
+            published_at = _parse_published_at(pub_date)
 
-            if not title or not link:
+            if not title or not link or published_at is None:
                 continue
 
             articles.append({
@@ -47,6 +70,7 @@ def search_civil_service_news(keyword: str, count: int = 10) -> list[dict]:
                 "summary": summary,
                 "pubDate": pub_date,
                 "keyword": keyword,
+                "published_at": published_at,
             })
 
         logger.info(f"[공무원뉴스] '{keyword}' {len(articles)}건 수집")
@@ -78,7 +102,19 @@ def collect_all_civil_service() -> str:
             all_articles.append(item)
 
     if not all_articles:
-        raise RuntimeError("모든 공무원 뉴스 검색 결과가 비어 있습니다.")
+        raise NoFreshArticlesError("새로운 공무원 뉴스가 없습니다.")
+
+    dated_articles = [article for article in all_articles if "published_at" in article]
+    if dated_articles:
+        now = _get_now()
+        store = ArticleStore(ARTICLE_STORE_PATH)
+        store.prune(now=now)
+        all_articles = filter_fresh(dated_articles, store, "civil_service", now=now)
+        if not all_articles:
+            raise NoFreshArticlesError("새로운 공무원 뉴스가 없습니다.")
+        for article in all_articles:
+            store.mark_seen("civil_service", article["link"], now)
+        store.save()
 
     # 설명이 있는 기사를 우선 순위로 정렬하고 최대 25~30건까지 수집
     prioritized = sorted(

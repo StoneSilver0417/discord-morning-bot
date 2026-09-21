@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from collectors.civil_service import (
     collect_all_civil_service,
@@ -647,6 +647,474 @@ class RegressionTests(unittest.TestCase):
                 self.assertTrue(bool(model))
                 self.assertTrue(bool(model.strip()))
                 self.assertEqual(model, model.strip())
+
+
+class ArticleStoreTests(unittest.TestCase):
+    """RED→GREEN tests for the stale/duplicate-news fix (utils/article_store)."""
+
+    def _make_articles(self, urls_and_ages):
+        from datetime import datetime, timezone, timedelta
+        now = datetime(2026, 9, 21, 7, 0, 0, tzinfo=timezone.utc)
+        articles = []
+        for i, (url, age_hours) in enumerate(urls_and_ages):
+            articles.append({
+                "source": "TestSource",
+                "title": f"Article {i}",
+                "link": url,
+                "summary": "summary",
+                "published_at": now - timedelta(hours=age_hours),
+            })
+        return articles, now
+
+    def test_no_fresh_articles_error_is_importable(self):
+        from utils.article_store import NoFreshArticlesError
+        self.assertTrue(issubclass(NoFreshArticlesError, Exception))
+
+    # --- URL canonicalization ---
+
+    def test_canonicalize_strips_fragment(self):
+        from utils.article_store import canonicalize_url
+        self.assertEqual(
+            "https://example.com/news",
+            canonicalize_url("https://example.com/news#section"),
+        )
+
+    def test_canonicalize_strips_utm_params(self):
+        from utils.article_store import canonicalize_url
+        url = "https://example.com/news?utm_source=twitter&utm_medium=social&real=1"
+        canon = canonicalize_url(url)
+        self.assertNotIn("utm_source", canon)
+        self.assertNotIn("utm_medium", canon)
+        self.assertIn("real=1", canon)
+
+    def test_canonicalize_strips_fbclid_and_gclid(self):
+        from utils.article_store import canonicalize_url
+        url = "https://example.com/news?fbclid=xyz&gclid=abc"
+        canon = canonicalize_url(url)
+        self.assertNotIn("fbclid", canon)
+        self.assertNotIn("gclid", canon)
+
+    def test_canonicalize_stable_for_same_url(self):
+        from utils.article_store import canonicalize_url
+        url = "https://example.com/news?a=1&b=2"
+        self.assertEqual(canonicalize_url(url), canonicalize_url(url))
+
+    # --- ArticleStore load/save ---
+
+    def test_store_loads_missing_file_as_empty(self):
+        import tempfile, os
+        from utils.article_store import ArticleStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "nonexistent.json")
+            store = ArticleStore(path)
+            self.assertEqual({}, store.seen)
+
+    def test_store_handles_malformed_json_safely(self):
+        import tempfile, os
+        from utils.article_store import ArticleStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "bad.json")
+            with open(path, "w") as f:
+                f.write("{NOT VALID JSON")
+            store = ArticleStore(path)
+            self.assertEqual({}, store.seen)
+
+    def test_store_handles_wrong_type_json_safely(self):
+        import tempfile, os, json
+        from utils.article_store import ArticleStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "wrong.json")
+            with open(path, "w") as f:
+                json.dump([1, 2, 3], f)  # list instead of dict
+            store = ArticleStore(path)
+            self.assertEqual({}, store.seen)
+
+    def test_store_save_and_reload(self):
+        import tempfile, os
+        from datetime import datetime, timezone
+        from utils.article_store import ArticleStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "seen.json")
+            store = ArticleStore(path)
+            ts = datetime(2026, 9, 21, 7, 0, tzinfo=timezone.utc)
+            store.mark_seen("it_news", "https://example.com/1", ts)
+            store.save()
+            store2 = ArticleStore(path)
+            self.assertIn("https://example.com/1", store2.seen.get("it_news", {}))
+
+    def test_store_atomic_write_does_not_corrupt_on_partial(self):
+        """Save should use atomic write (temp file + rename)."""
+        import tempfile, os
+        from datetime import datetime, timezone
+        from utils.article_store import ArticleStore
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "seen.json")
+            store = ArticleStore(path)
+            ts = datetime(2026, 9, 21, 7, 0, tzinfo=timezone.utc)
+            store.mark_seen("it_news", "https://example.com/1", ts)
+            store.save()
+            # File must be valid JSON after save
+            import json
+            with open(path) as f:
+                data = json.load(f)
+            self.assertIsInstance(data, dict)
+
+    # --- freshness filter ---
+
+    def test_filter_fresh_keeps_articles_within_window(self):
+        from utils.article_store import ArticleStore, filter_fresh
+        import tempfile, os
+        articles, now = self._make_articles([
+            ("https://example.com/new", 1),   # 1h ago — fresh
+            ("https://example.com/old", 50),  # 50h ago — stale
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ArticleStore(os.path.join(tmpdir, "seen.json"))
+            fresh = filter_fresh(articles, store, "it_news", now=now, max_age_hours=48)
+        self.assertEqual(1, len(fresh))
+        self.assertEqual("https://example.com/new", fresh[0]["link"])
+
+    def test_filter_fresh_excludes_seen_urls(self):
+        from utils.article_store import ArticleStore, filter_fresh
+        import tempfile, os
+        articles, now = self._make_articles([
+            ("https://example.com/1", 1),
+            ("https://example.com/2", 2),
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ArticleStore(os.path.join(tmpdir, "seen.json"))
+            store.mark_seen("it_news", "https://example.com/1", now)
+            fresh = filter_fresh(articles, store, "it_news", now=now, max_age_hours=48)
+        self.assertEqual(1, len(fresh))
+        self.assertEqual("https://example.com/2", fresh[0]["link"])
+
+    def test_filter_fresh_dedupes_by_canonical_url(self):
+        from utils.article_store import ArticleStore, filter_fresh
+        import tempfile, os
+        articles, now = self._make_articles([
+            ("https://example.com/a?utm_source=x", 1),
+            ("https://example.com/a", 2),  # same canonical
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ArticleStore(os.path.join(tmpdir, "seen.json"))
+            fresh = filter_fresh(articles, store, "it_news", now=now, max_age_hours=48)
+        self.assertEqual(1, len(fresh))
+
+    def test_filter_fresh_sorts_newest_first(self):
+        from utils.article_store import ArticleStore, filter_fresh
+        import tempfile, os
+        articles, now = self._make_articles([
+            ("https://example.com/older", 10),
+            ("https://example.com/newer", 1),
+            ("https://example.com/middle", 5),
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ArticleStore(os.path.join(tmpdir, "seen.json"))
+            fresh = filter_fresh(articles, store, "it_news", now=now, max_age_hours=48)
+        links = [a["link"] for a in fresh]
+        self.assertEqual(["https://example.com/newer", "https://example.com/middle", "https://example.com/older"], links)
+
+    def test_filter_fresh_all_seen_returns_empty(self):
+        from utils.article_store import ArticleStore, filter_fresh
+        import tempfile, os
+        articles, now = self._make_articles([
+            ("https://example.com/1", 1),
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ArticleStore(os.path.join(tmpdir, "seen.json"))
+            store.mark_seen("it_news", "https://example.com/1", now)
+            fresh = filter_fresh(articles, store, "it_news", now=now, max_age_hours=48)
+        self.assertEqual([], fresh)
+
+    def test_filter_fresh_default_window_is_48h(self):
+        """filter_fresh with no max_age_hours should default to 48h."""
+        from utils.article_store import ArticleStore, filter_fresh
+        import tempfile, os
+        articles, now = self._make_articles([
+            ("https://example.com/fresh", 47),
+            ("https://example.com/stale", 49),
+        ])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ArticleStore(os.path.join(tmpdir, "seen.json"))
+            fresh = filter_fresh(articles, store, "it_news", now=now)
+        self.assertEqual(1, len(fresh))
+        self.assertEqual("https://example.com/fresh", fresh[0]["link"])
+
+    # --- prune history ---
+
+    def test_store_prune_removes_old_entries(self):
+        import tempfile, os
+        from datetime import datetime, timezone, timedelta
+        from utils.article_store import ArticleStore
+        now = datetime(2026, 9, 21, 7, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = ArticleStore(os.path.join(tmpdir, "seen.json"))
+            store.mark_seen("it_news", "https://example.com/old", now - timedelta(hours=200))
+            store.mark_seen("it_news", "https://example.com/new", now - timedelta(hours=10))
+            store.prune(now=now, max_age_hours=48)
+            self.assertNotIn("https://example.com/old", store.seen.get("it_news", {}))
+            self.assertIn("https://example.com/new", store.seen.get("it_news", {}))
+
+    # --- collector timestamp capture ---
+
+    def test_it_news_rss_article_has_published_at(self):
+        """collect_rss_feeds must include published_at (datetime) in each article."""
+        from unittest.mock import patch, MagicMock
+        import feedparser
+        from collectors.it_news import collect_rss_feeds
+
+        mock_entry = MagicMock()
+        mock_entry.get.side_effect = lambda key, default="": {
+            "title": "Test Article",
+            "link": "https://example.com/it",
+            "summary": "summary",
+            "published": "Mon, 21 Sep 2026 05:00:00 GMT",
+        }.get(key, default)
+        mock_entry.__contains__ = lambda self, key: key in {"title", "link", "summary", "published"}
+
+        mock_feed = MagicMock()
+        mock_feed.entries = [mock_entry]
+
+        with patch("collectors.it_news.feedparser.parse", return_value=mock_feed):
+            articles = collect_rss_feeds()
+
+        self.assertTrue(len(articles) >= 1)
+        art = articles[0]
+        self.assertIn("published_at", art)
+        from datetime import datetime
+        self.assertIsInstance(art["published_at"], datetime)
+
+    def test_hackernews_article_has_published_at(self):
+        """collect_hackernews must include published_at (datetime) from HN `time` field."""
+        from unittest.mock import patch
+        import time as time_module
+        from collectors.it_news import collect_hackernews
+
+        story_ids = [12345]
+        story_item = {
+            "id": 12345,
+            "title": "HN Article",
+            "url": "https://hn-example.com",
+            "score": 100,
+            "descendants": 50,
+            "time": 1758488400,  # a Unix timestamp
+        }
+
+        with patch("collectors.it_news.requests.get") as mock_get:
+            resp_ids = MagicMock()
+            resp_ids.json.return_value = story_ids
+            resp_item = MagicMock()
+            resp_item.json.return_value = story_item
+            mock_get.side_effect = [resp_ids, resp_item]
+
+            articles = collect_hackernews()
+
+        self.assertEqual(1, len(articles))
+        self.assertIn("published_at", articles[0])
+        from datetime import datetime
+        self.assertIsInstance(articles[0]["published_at"], datetime)
+
+    def test_rss_article_missing_date_is_rejected(self):
+        """RSS articles with no parseable date must be excluded."""
+        from unittest.mock import patch, MagicMock
+        from collectors.it_news import collect_rss_feeds
+
+        mock_entry = MagicMock()
+        mock_entry.get.side_effect = lambda key, default="": {
+            "title": "No Date Article",
+            "link": "https://example.com/nodate",
+            "summary": "summary",
+        }.get(key, default)
+
+        mock_feed = MagicMock()
+        mock_feed.entries = [mock_entry]
+
+        with patch("collectors.it_news.feedparser.parse", return_value=mock_feed):
+            articles = collect_rss_feeds()
+
+        # No article without a parseable date should appear
+        for art in articles:
+            self.assertIn("published_at", art)
+
+    def test_hackernews_article_missing_time_is_rejected(self):
+        """HN items without a `time` field must be excluded."""
+        from unittest.mock import patch, MagicMock
+        from collectors.it_news import collect_hackernews
+
+        story_ids = [99999]
+        story_item = {
+            "id": 99999,
+            "title": "HN No Time",
+            "url": "https://hn-example.com",
+            "score": 50,
+            "descendants": 10,
+            # no "time" key
+        }
+
+        with patch("collectors.it_news.requests.get") as mock_get:
+            resp_ids = MagicMock()
+            resp_ids.json.return_value = story_ids
+            resp_item = MagicMock()
+            resp_item.json.return_value = story_item
+            mock_get.side_effect = [resp_ids, resp_item]
+
+            articles = collect_hackernews()
+
+        self.assertEqual(0, len(articles))
+
+    def test_civil_service_rss_article_has_published_at(self):
+        """search_civil_service_news must include published_at (datetime) in each article."""
+        from unittest.mock import patch, MagicMock
+        from collectors.civil_service import search_civil_service_news
+
+        mock_entry = {
+            "title": "공무원 테스트",
+            "link": "https://news.google.com/rss/articles/CBMi1",
+            "summary": "설명",
+            "published": "Mon, 21 Sep 2026 05:00:00 GMT",
+        }
+
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        mock_feed.entries = [mock_entry]
+
+        with patch("collectors.civil_service.feedparser.parse", return_value=mock_feed):
+            articles = search_civil_service_news("공무원")
+
+        self.assertEqual(1, len(articles))
+        self.assertIn("published_at", articles[0])
+        from datetime import datetime
+        self.assertIsInstance(articles[0]["published_at"], datetime)
+
+    def test_civil_service_article_missing_date_is_rejected(self):
+        """Civil service RSS articles with no parseable date must be excluded."""
+        from unittest.mock import patch, MagicMock
+        from collectors.civil_service import search_civil_service_news
+
+        mock_entry = {
+            "title": "날짜없는 공무원 기사",
+            "link": "https://news.google.com/rss/articles/CBMi2",
+            "summary": "설명",
+            # no published or pubDate
+        }
+
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        mock_feed.entries = [mock_entry]
+
+        with patch("collectors.civil_service.feedparser.parse", return_value=mock_feed):
+            articles = search_civil_service_news("공무원")
+
+        # All returned articles must have a published_at
+        for art in articles:
+            self.assertIn("published_at", art)
+        # The entry with no date must be excluded
+        self.assertEqual(0, len(articles))
+
+    # --- existing fixture compatibility: pubDate still returned ---
+
+    def test_civil_service_rss_cleaning_and_parsing_still_works(self):
+        """Existing shape tests still pass after adding published_at."""
+        from unittest.mock import patch, MagicMock
+        from collectors.civil_service import search_civil_service_news
+
+        mock_feed = MagicMock()
+        mock_feed.bozo = False
+        mock_feed.entries = [
+            {
+                "title": "<b>공무원</b> &quot;처우&quot; &amp; 급여 &apos;개선&apos;",
+                "summary": "정부가 <b>공무원</b> 처우를 <b>개선</b> &lt;합의&gt;",
+                "link": "https://news.google.com/rss/articles/CBMi1",
+                "published": "Wed, 02 Sep 2026 09:00:00 GMT",
+            },
+            {
+                "title": "전산직 <b>채용</b> 공고",
+                "description": "전산직 공무원 <b>선발</b> 공고",
+                "link": "https://news.google.com/rss/articles/CBMi2",
+                "pubDate": "Wed, 02 Sep 2026 10:00:00 GMT",
+            },
+            {
+                "title": "링크 없음",
+                "link": "",
+                "summary": "설명",
+                "published": "Wed, 02 Sep 2026 08:00:00 GMT",
+            },
+        ]
+        with patch("collectors.civil_service.feedparser.parse", return_value=mock_feed):
+            articles = search_civil_service_news("공무원", count=5)
+
+        self.assertEqual(2, len(articles))
+        self.assertEqual(articles[0]["title"], '공무원 "처우" & 급여 \'개선\'')
+        self.assertEqual(articles[0]["summary"], "정부가 공무원 처우를 개선 <합의>")
+        self.assertIn("published_at", articles[0])
+
+    # --- collect_all_it_news: NoFreshArticlesError when all seen ---
+
+    def test_it_news_raises_no_fresh_when_all_seen(self):
+        """collect_all_it_news raises NoFreshArticlesError when all articles already seen."""
+        from utils.article_store import NoFreshArticlesError, ArticleStore
+        from unittest.mock import patch, MagicMock
+        import tempfile, os
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 9, 21, 7, 0, tzinfo=timezone.utc)
+        article = {
+            "source": "HN",
+            "title": "Already Seen",
+            "link": "https://example.com/seen",
+            "summary": "x",
+            "published_at": now,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = os.path.join(tmpdir, "seen.json")
+            store = ArticleStore(store_path)
+            store.mark_seen("it_news", "https://example.com/seen", now)
+            store.save()
+
+            with (
+                patch("collectors.it_news.collect_hackernews", return_value=[article]),
+                patch("collectors.it_news.collect_rss_feeds", return_value=[]),
+                patch("collectors.it_news.ARTICLE_STORE_PATH", store_path),
+                patch("collectors.it_news._get_now", return_value=now),
+            ):
+                with self.assertRaises(NoFreshArticlesError):
+                    from collectors import it_news
+                    it_news.collect_all_it_news()
+
+    # --- collect_all_civil_service: NoFreshArticlesError when all seen ---
+
+    def test_civil_news_raises_no_fresh_when_all_seen(self):
+        """collect_all_civil_service raises NoFreshArticlesError when all articles already seen."""
+        from utils.article_store import NoFreshArticlesError, ArticleStore
+        from unittest.mock import patch, MagicMock
+        import tempfile, os
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 9, 21, 7, 0, tzinfo=timezone.utc)
+        article = {
+            "title": "공무원 기사",
+            "link": "https://example.com/civil-seen",
+            "summary": "설명",
+            "pubDate": "Mon, 21 Sep 2026 07:00:00 GMT",
+            "keyword": "공무원",
+            "published_at": now,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store_path = os.path.join(tmpdir, "seen.json")
+            store = ArticleStore(store_path)
+            store.mark_seen("civil_service", "https://example.com/civil-seen", now)
+            store.save()
+
+            with (
+                patch("collectors.civil_service.search_civil_service_news", return_value=[article]),
+                patch("collectors.civil_service.ARTICLE_STORE_PATH", store_path),
+                patch("collectors.civil_service._get_now", return_value=now),
+            ):
+                with self.assertRaises(NoFreshArticlesError):
+                    from collectors import civil_service
+                    civil_service.collect_all_civil_service()
 
 
 if __name__ == "__main__":
