@@ -1,6 +1,8 @@
 """공무원 관련 뉴스 수집기 - Google News RSS 기반"""
+import difflib
 import html
 import re
+import unicodedata
 import urllib.parse
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -40,6 +42,102 @@ def _clean_text(raw_text: str) -> str:
     return " ".join(unescaped.split()).strip()
 
 
+_CIVIL_SERVICE_TERMS = (
+    "공무원",
+    "공무직",
+    "공시생",
+    "공직사회",
+    "국가직",
+    "사회복지직",
+    "인사혁신처",
+    "전산직",
+    "지방직",
+)
+
+
+def _normalize_for_similarity(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", _clean_text(text)).casefold()
+    return re.sub(r"[^0-9a-z가-힣]", "", normalized)
+
+
+def _title_without_publisher(title: str) -> str:
+    return re.sub(r"\s+-\s+[^-]{2,40}$", "", title).strip()
+
+
+def _is_similar(left: str, right: str, threshold: float) -> bool:
+    normalized_left = _normalize_for_similarity(left)
+    normalized_right = _normalize_for_similarity(right)
+    if not normalized_left or not normalized_right:
+        return False
+
+    left_numbers = set(re.findall(r"\d+", normalized_left))
+    right_numbers = set(re.findall(r"\d+", normalized_right))
+    if left_numbers and right_numbers and left_numbers != right_numbers:
+        return False
+
+    return difflib.SequenceMatcher(
+        None,
+        normalized_left,
+        normalized_right,
+    ).ratio() >= threshold
+
+
+def _is_relevant(article: dict) -> bool:
+    text = unicodedata.normalize(
+        "NFKC",
+        f'{article.get("title", "")} {article.get("summary", "")}',
+    )
+    return any(term in text for term in _CIVIL_SERVICE_TERMS)
+
+
+def _articles_are_duplicates(left: dict, right: dict) -> bool:
+    left_title = _title_without_publisher(left.get("title", ""))
+    right_title = _title_without_publisher(right.get("title", ""))
+    if _normalize_for_similarity(left_title) == _normalize_for_similarity(right_title):
+        return True
+    if _is_similar(left_title, right_title, 0.90):
+        return True
+
+    left_summary = left.get("summary", "")
+    right_summary = right.get("summary", "")
+    if _is_similar(left_title, right_title, 0.70):
+        if _is_similar(left_summary, right_summary, 0.60):
+            return True
+
+    return _is_similar(
+        f"{left_title} {left_summary}",
+        f"{right_title} {right_summary}",
+        0.82,
+    )
+
+
+def _deduplicate_articles(articles: list[dict]) -> list[dict]:
+    groups: list[list[dict]] = []
+    for article in articles:
+        for group in groups:
+            if _articles_are_duplicates(article, group[0]):
+                group.append(article)
+                break
+        else:
+            groups.append([article])
+
+    deduped: list[dict] = []
+    minimum_date = datetime.min.replace(tzinfo=timezone.utc)
+    for group in groups:
+        group.sort(
+            key=lambda article: (
+                article.get("published_at", minimum_date),
+                len(article.get("summary", ""))
+                if "published_at" in article
+                else 0,
+            ),
+            reverse=True,
+        )
+        deduped.append(group[0])
+
+    return deduped
+
+
 def search_civil_service_news(keyword: str, count: int = 10) -> list[dict]:
     """Google News RSS로 키워드 관련 공무원 뉴스를 수집합니다."""
     articles: list[dict] = []
@@ -75,7 +173,7 @@ def search_civil_service_news(keyword: str, count: int = 10) -> list[dict]:
 
         logger.info(f"[공무원뉴스] '{keyword}' {len(articles)}건 수집")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BROAD_EXCEPT_OK - external RSS boundary
         logger.error(f"[공무원뉴스] '{keyword}' 검색 실패: {e}")
 
     return articles
@@ -88,7 +186,6 @@ search_google_news = search_civil_service_news
 def collect_all_civil_service() -> str:
     """모든 키워드에 대해 공무원 뉴스를 수집하여 텍스트형 리포트로 반환합니다."""
     all_articles: list[dict] = []
-    seen_titles: set[str] = set()
 
     for keyword in Config.CIVIL_SERVICE_KEYWORDS:
         news = search_civil_service_news(keyword, count=10)
@@ -96,32 +193,40 @@ def collect_all_civil_service() -> str:
             title = item.get("title", "")
             if not title or len(title) < 5:
                 continue
-            if title in seen_titles:
+            if not _is_relevant(item):
                 continue
-            seen_titles.add(title)
             all_articles.append(item)
 
     if not all_articles:
         raise NoFreshArticlesError("새로운 공무원 뉴스가 없습니다.")
+
+    all_articles = _deduplicate_articles(all_articles)
 
     dated_articles = [article for article in all_articles if "published_at" in article]
     if dated_articles:
         now = _get_now()
         store = ArticleStore(ARTICLE_STORE_PATH)
         store.prune(now=now)
-        all_articles = filter_fresh(dated_articles, store, "civil_service", now=now)
-        if not all_articles:
+
+        fresh_articles = filter_fresh(dated_articles, store, "civil_service", now=now)
+        if not fresh_articles:
             raise NoFreshArticlesError("새로운 공무원 뉴스가 없습니다.")
-        for article in all_articles:
+        all_articles = fresh_articles
+
+    all_articles.sort(
+        key=lambda article: article.get(
+            "published_at",
+            datetime.min.replace(tzinfo=timezone.utc),
+        ),
+        reverse=True,
+    )
+
+    display_articles = all_articles[:15]
+
+    if dated_articles:
+        for article in display_articles:
             store.mark_seen("civil_service", article["link"], now)
         store.save()
-
-    # 설명이 있는 기사를 우선 순위로 정렬하고 최대 25~30건까지 수집
-    prioritized = sorted(
-        all_articles,
-        key=lambda a: 0 if a.get("summary") else 1,
-    )
-    display_articles = prioritized[:25]
 
     text = f"[공무원 관련 뉴스 수집 결과 - 총 {len(all_articles)}건 중 후보 {len(display_articles)}건]\n\n"
     for i, art in enumerate(display_articles, 1):
