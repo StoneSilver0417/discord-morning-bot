@@ -354,12 +354,18 @@ class RegressionTests(unittest.TestCase):
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
     def test_gemini_quota_exhaustion_returns_full_raw_news(self, mocked_client):
-        raw_news = "뉴스 목록\n" + "A" * 5000
+        raw_news = "[IT 뉴스 수집 결과]\n\n" + "\n\n".join(
+            f"{index}. **기사{index}** (테스트)\n설명: 요약{index}\n"
+            f"🔗 https://example.com/{index}"
+            for index in range(1, 13)
+        )
         mocked_client.return_value.models.generate_content.side_effect = RuntimeError(
             "429 RESOURCE_EXHAUSTED: quota exceeded"
         )
 
-        self.assertEqual(raw_news, process_with_gemini("it_news", raw_news))
+        result = process_with_gemini("it_news", raw_news)
+        self.assertEqual(10, result.count("🔗 http"))
+        self.assertNotIn("https://example.com/11", result)
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
@@ -374,7 +380,10 @@ class RegressionTests(unittest.TestCase):
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
     def test_incomplete_gemini_response_returns_full_raw_news(self, mocked_client):
-        raw_news = "완전한 원문 뉴스 목록"
+        raw_news = (
+            "[IT 뉴스 수집 결과]\n\n"
+            "1. **기사1** (테스트)\n설명: 요약1\n🔗 https://example.com/1"
+        )
         response = Mock()
         response.text = "중간에 잘린 AI 응답"
         response.candidates = [
@@ -382,12 +391,16 @@ class RegressionTests(unittest.TestCase):
         ]
         mocked_client.return_value.models.generate_content.return_value = response
 
-        self.assertEqual(raw_news, process_with_gemini("it_news", raw_news))
+        result = process_with_gemini("it_news", raw_news)
+        self.assertEqual(1, result.count("🔗 http"))
 
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
     def test_invalid_news_list_returns_full_raw_news(self, mocked_client):
-        raw_news = "완전한 원문 뉴스 목록"
+        raw_news = (
+            "[IT 뉴스 수집 결과]\n\n"
+            "1. **기사1** (테스트)\n설명: 요약1\n🔗 https://example.com/1"
+        )
         response = Mock()
         response.text = "1. 첫 기사 제목만 있고 요약이나 링크가 전혀 없는 불완전한 결과"
         response.candidates = [
@@ -395,7 +408,8 @@ class RegressionTests(unittest.TestCase):
         ]
         mocked_client.return_value.models.generate_content.return_value = response
 
-        self.assertEqual(raw_news, process_with_gemini("it_news", raw_news))
+        result = process_with_gemini("it_news", raw_news)
+        self.assertEqual(1, result.count("🔗 http"))
 
     def test_long_discord_description_is_split_without_loss(self):
         content = "A" * 4096 + "\n" + "B" * 1000
@@ -463,11 +477,15 @@ class RegressionTests(unittest.TestCase):
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
     def test_gemini_fallback_on_404(self, mocked_client):
+        raw_news = (
+            "[IT 뉴스 수집 결과 - 총 2건]\n\n"
+            "1. **기사1** (테스트)\n설명: 요약1\n🔗 https://example.com/1\n\n"
+            "2. **기사2** (테스트)\n설명: 요약2\n🔗 https://example.com/2"
+        )
         response = Mock()
         response.text = (
-            "1. 기사1\n→ 요약1\n🔗 https://example.com/1\n"
-            "2. 기사2\n→ 요약2\n🔗 https://example.com/2\n"
-            "3. 기사3\n→ 요약3\n🔗 https://example.com/3"
+            "1. [상] 기사1\n• 내용 요약: 요약1\n• 실무/영향: 영향1\n🔗 https://example.com/1\n"
+            "2. [중] 기사2\n• 내용 요약: 요약2\n• 실무/영향: 영향2\n🔗 https://example.com/2"
         )
         response.candidates = [
             SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
@@ -478,8 +496,8 @@ class RegressionTests(unittest.TestCase):
         ]
 
         with patch.object(main.Config, "GEMINI_MODEL_IT_NEWS", "gemini-3.1-pro-preview"):
-            result = process_with_gemini("it_news", "IT뉴스 원문")
-        self.assertIn("1. 기사1", result)
+            result = process_with_gemini("it_news", raw_news)
+        self.assertEqual(response.text, result)
         self.assertEqual(2, mocked_client.return_value.models.generate_content.call_count)
         first_call = mocked_client.return_value.models.generate_content.call_args_list[0]
         second_call = mocked_client.return_value.models.generate_content.call_args_list[1]
@@ -489,13 +507,18 @@ class RegressionTests(unittest.TestCase):
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
     def test_gemini_fallback_on_429(self, mocked_client):
+        raw_news = (
+            "[IT 뉴스 수집 결과 - 총 2건]\n\n"
+            "1. **기사1** (테스트)\n설명: 요약1\n🔗 https://example.com/1\n\n"
+            "2. **기사2** (테스트)\n설명: 요약2\n🔗 https://example.com/2"
+        )
         response = Mock()
         response.text = (
-            "1. [보안] 기사1\n"
+            "1. [상] 기사1\n"
             "   • 내용 요약: 핵심 내용 요약1\n"
             "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향1\n"
             "   🔗 https://example.com/1\n"
-            "2. [클라우드] 기사2\n"
+            "2. [중] 기사2\n"
             "   • 내용 요약: 핵심 내용 요약2\n"
             "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향2\n"
             "   🔗 https://example.com/2"
@@ -509,7 +532,7 @@ class RegressionTests(unittest.TestCase):
         ]
 
         with patch.object(main.Config, "GEMINI_MODEL_IT_NEWS", "gemini-3.1-pro-preview"):
-            result = process_with_gemini("it_news", "IT뉴스 원문")
+            result = process_with_gemini("it_news", raw_news)
         self.assertEqual(response.text, result)
         self.assertEqual(2, mocked_client.return_value.models.generate_content.call_count)
         first_call = mocked_client.return_value.models.generate_content.call_args_list[0]
@@ -520,14 +543,18 @@ class RegressionTests(unittest.TestCase):
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
     def test_news_list_detailed_format_accepted(self, mocked_client):
-        raw_news = "완전한 원문 뉴스 목록"
+        raw_news = (
+            "[IT 뉴스 수집 결과 - 총 2건]\n\n"
+            "1. **기사1** (테스트)\n설명: 요약1\n🔗 https://example.com/1\n\n"
+            "2. **기사2** (테스트)\n설명: 요약2\n🔗 https://example.com/2"
+        )
         response = Mock()
         response.text = (
-            "1. [보안] 기사1\n"
+            "1. [상] 기사1\n"
             "   • 내용 요약: 핵심 내용 요약1\n"
             "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향1\n"
             "   🔗 https://example.com/1\n"
-            "2. [클라우드] 기사2\n"
+            "2. [중] 기사2\n"
             "   • 내용 요약: 핵심 내용 요약2\n"
             "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향2\n"
             "   🔗 https://example.com/2"
@@ -543,7 +570,11 @@ class RegressionTests(unittest.TestCase):
     @patch.object(main.Config, "GEMINI_API_KEY", "test-key")
     @patch("processors.gemini_processor.genai.Client")
     def test_news_list_missing_link_rejected(self, mocked_client):
-        raw_news = "완전한 원문 뉴스 목록"
+        raw_news = (
+            "[IT 뉴스 수집 결과]\n\n"
+            "1. **기사1** (테스트)\n설명: 요약1\n🔗 https://example.com/1\n\n"
+            "2. **기사2** (테스트)\n설명: 요약2\n🔗 https://example.com/2"
+        )
         response = Mock()
         response.text = (
             "1. [보안] 기사1\n"
@@ -559,20 +590,7 @@ class RegressionTests(unittest.TestCase):
         mocked_client.return_value.models.generate_content.return_value = response
 
         result = process_with_gemini("it_news", raw_news)
-        self.assertEqual(raw_news, result)
-
-    def test_system_prompts_selective_3_to_5(self):
-        from processors.gemini_processor import SYSTEM_PROMPTS
-        self.assertIn("3~5개", SYSTEM_PROMPTS["it_news"])
-        self.assertIn("전산직 공무원", SYSTEM_PROMPTS["it_news"])
-        self.assertIn("내용 요약", SYSTEM_PROMPTS["it_news"])
-        self.assertIn("실무/영향", SYSTEM_PROMPTS["it_news"])
-        self.assertIn("수집된 뉴스를 분석하여 가장 중요한 3~5개만 선별하고, 기사 내용을 상세히 요약할 것", SYSTEM_PROMPTS["it_news"])
-        self.assertIn("3~5개", SYSTEM_PROMPTS["civil_service"])
-        self.assertIn("[전산직] [복지직] [공통]", SYSTEM_PROMPTS["civil_service"])
-        self.assertIn("내용 요약", SYSTEM_PROMPTS["civil_service"])
-        self.assertIn("실무/영향", SYSTEM_PROMPTS["civil_service"])
-        self.assertIn("수집된 뉴스를 분석하여 가장 중요한 3~5개만 선별하고, 기사 내용을 상세히 요약할 것", SYSTEM_PROMPTS["civil_service"])
+        self.assertEqual(2, result.count("🔗 http"))
 
     def test_is_model_not_found_detection(self):
         from processors.gemini_processor import _is_model_not_found

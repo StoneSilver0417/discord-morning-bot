@@ -1,9 +1,12 @@
 """Google Gemini LLM 요약/가공 프로세서"""
-import re
-
 from google import genai
 from google.genai import types
 from config import Config
+from processors.news_selection import (
+    NewsSelectionContract,
+    build_news_contract,
+    is_valid_news_selection,
+)
 from utils.logger import setup_logger
 
 logger = setup_logger("gemini")
@@ -27,12 +30,12 @@ SYSTEM_PROMPTS = {
         "4. 마지막에 '오늘 요약 한 줄' 섹션으로 핵심만 정리하세요."
     ),
     "it_news": (
-        "당신은 IT 트렌드 큐레이터입니다. 수집된 뉴스를 분석하여 가장 중요한 3~5개만 선별하고, 기사 내용을 상세히 요약할 것.\n"
+        "당신은 IT 트렌드 큐레이터입니다. 수집된 뉴스를 분석하여 중요도와 업무 관련성이 높은 순서로 선별하고, 기사 내용을 상세히 요약할 것.\n"
         "다음 규칙을 따르세요:\n"
-        "1. 제공된 뉴스 후보를 깊이 분석하고 중복 및 단순 홍보성 기사를 제거하여, **전산직 공무원(IT 인프라, 보안, 시스템 관리, AI/디지털 전환)** 및 IT 실무자에게 가장 가치 있는 뉴스를 **3~5개(최대 5개 이내)**로 압축 선별하세요.\n"
+        "1. 제공된 뉴스 후보의 내용과 파급력을 분석하고 중복 및 단순 홍보성 기사를 제거하여, **전산직 공무원(IT 인프라, 보안, 시스템 관리, AI/디지털 전환)** 및 IT 실무자에게 가장 가치 있는 뉴스부터 정렬하세요.\n"
         "2. 국내외 공공기관, 정부 IT 정책, 보안 사고 예방, 최신 기술 트렌드 관련 기사는 최우선 포함하세요.\n"
         "3. 단순히 기사를 복사하거나 1줄로 단순 요약하지 말고, 기사 내용을 풍부하고 알기 쉽게 분석하여 아래 Markdown 형식으로 정확히 작성하세요.\n"
-        "   번호. [태그] 기사 제목 (출처)\n"
+        "   번호. [우선순위: 상/중/하] [태그] 기사 제목 (출처)\n"
         "   • 내용 요약: 핵심 내용을 이해하기 쉽게 2~3줄로 상세 요약\n"
         "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향 1줄\n"
         "   🔗 원문 URL\n"
@@ -40,12 +43,12 @@ SYSTEM_PROMPTS = {
         "5. 서론, 결론, 별도 총평 없이 번호가 매겨진 뉴스 목록만 깔끔하게 출력하세요."
     ),
     "civil_service": (
-        "당신은 공무원 관련 뉴스 큐레이터입니다. 수집된 뉴스를 분석하여 가장 중요한 3~5개만 선별하고, 기사 내용을 상세히 요약할 것.\n"
+        "당신은 공무원 관련 뉴스 큐레이터입니다. 수집된 뉴스를 분석하여 중요도와 업무 관련성이 높은 순서로 선별하고, 기사 내용을 상세히 요약할 것.\n"
         "다음 규칙을 따르세요:\n"
-        "1. 제공된 뉴스 후보를 깊이 분석하고 중복 기사를 제거하여, 오늘 공무원에게 가장 중요하고 파급력이 큰 뉴스를 **3~5개(최대 5개 이내)**로 압축 선별하세요.\n"
+        "1. 제공된 뉴스 후보의 내용과 파급력을 분석하고 중복 기사를 제거하여, 오늘 공무원에게 가장 중요하고 업무 관련성이 높은 뉴스부터 정렬하세요.\n"
         "2. [전산직] [복지직] [공통] 직렬 태그를 적절히 활용하고, 급여, 연금, 처우 개선, 채용 일정 등 모든 공무원에게 파급력이 큰 소식을 우선 포함하세요.\n"
         "3. 단순히 기사를 복사하거나 1줄로 단순 요약하지 말고, 기사 내용을 풍부하고 알기 쉽게 분석하여 아래 Markdown 형식으로 정확히 작성하세요.\n"
-        "   번호. [태그] 기사 제목\n"
+        "   번호. [우선순위: 상/중/하] [태그] 기사 제목\n"
         "   • 내용 요약: 핵심 내용을 이해하기 쉽게 2~3줄로 상세 요약\n"
         "   • 실무/영향: 공무원 또는 IT 실무에 미치는 영향 1줄\n"
         "   🔗 원문 URL\n"
@@ -114,33 +117,47 @@ def _is_complete_response(response) -> bool:
     return finish_name.upper().endswith("STOP")
 
 
-def _is_complete_news_list(category: str, result: str) -> bool:
-    """뉴스 결과에 1~5개의 번호·요약·링크가 모두 정상 포함되어 있는지 확인합니다."""
+def _is_complete_news_list(
+    category: str,
+    result: str,
+    contract: NewsSelectionContract | None,
+) -> bool:
     if category not in {"it_news", "civil_service"}:
         return True
-
-    numbered_items = re.findall(r"(?m)^\s*\d+[.)]\s+", result)
-    summary_lines = re.findall(
-        r"(?m)^\s*(?:[•\-*→]|->|내용\s*요약|실무[/\s]*영향)\s*", result
-    )
-    links = re.findall(r"https?://\S+", result)
-    return min(len(numbered_items), len(summary_lines), len(links)) >= 1
+    return contract is not None and is_valid_news_selection(result, contract)
 
 
 def process_with_gemini(category: str, raw_data: str) -> str:
     """Gemini를 사용하여 원시 데이터를 가공합니다."""
     if not raw_data or not raw_data.strip():
         raise ValueError(f"[{category}] Gemini에 전달할 수집 데이터가 비어 있습니다.")
+    news_contract = (
+        build_news_contract(raw_data)
+        if category in {"it_news", "civil_service"}
+        else None
+    )
+    fallback_data = (
+        news_contract.fallback_text if news_contract is not None else raw_data
+    )
     if not Config.GEMINI_API_KEY:
         logger.warning("Gemini API 키 미설정 - 원본 데이터 반환")
-        return raw_data
+        return fallback_data
 
     system_prompt = SYSTEM_PROMPTS.get(category, "다음 내용을 한국어로 간결하게 요약해주세요.")
     primary_model = Config.get_model_for_category(category)
     fallback_model = Config.GEMINI_MODEL_FALLBACK
     client = genai.Client(api_key=Config.GEMINI_API_KEY)
 
-    prompt_contents = f"{system_prompt}\n\n--- 데이터 ---\n{raw_data}"
+    selection_instruction = ""
+    if news_contract is not None and news_contract.target_count:
+        selection_instruction = (
+            f"\n후보 전체를 비교하여 중요도와 관련성이 높은 순서로 정확히 "
+            f"{news_contract.target_count}건을 출력하세요. 각 기사에 우선순위 "
+            "상/중/하를 표시하고 후보에 포함된 원문 URL만 사용하세요."
+        )
+    prompt_contents = (
+        f"{system_prompt}{selection_instruction}\n\n--- 데이터 ---\n{raw_data}"
+    )
     gen_config = types.GenerateContentConfig(
         max_output_tokens=8192,
         temperature=0.2,
@@ -191,12 +208,12 @@ def process_with_gemini(category: str, raw_data: str) -> str:
             logger.warning(
                 f"[{category}] Gemini 응답이 중단됨 - 수집한 원문 전체를 전송합니다."
             )
-            return raw_data
-        if not _is_complete_news_list(category, result):
+            return fallback_data
+        if not _is_complete_news_list(category, result, news_contract):
             logger.warning(
                 f"[{category}] Gemini 뉴스 목록이 불완전함 - 수집한 원문 전체를 전송합니다."
             )
-            return raw_data
+            return fallback_data
         logger.info(f"[{category}] Gemini 가공 완료 ({len(result)}자)")
         return result
 
@@ -206,12 +223,12 @@ def process_with_gemini(category: str, raw_data: str) -> str:
             logger.warning(
                 f"[{category}] Gemini 할당량 소진 - 수집한 원문 전체를 전송합니다."
             )
-            return raw_data
+            return fallback_data
         if _is_transient_error(e):
             logger.warning(
                 f"[{category}] Gemini 일시 장애 - 수집한 원문 전체를 전송합니다."
             )
-            return raw_data
+            return fallback_data
         raise RuntimeError(f"[{category}] Gemini 가공 실패") from e
 
 
