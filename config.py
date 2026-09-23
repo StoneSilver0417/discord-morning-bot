@@ -44,7 +44,9 @@ class Config:
         {"name": "GeekNews", "url": "https://news.hada.io/rss/news"},
         {"name": "요즘IT", "url": "https://yozm.wishket.com/magazine/feed/"},
         {"name": "TechCrunch", "url": "https://techcrunch.com/feed/"},
-        {"name": "44bits", "url": "https://www.44bits.io/ko/feed.xml"},
+        {"name": "Ars Technica", "url": "https://feeds.arstechnica.com/arstechnica/index"},
+        {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml"},
+        {"name": "Wired", "url": "https://www.wired.com/feed/rss"},
     ]
 
     # 공무원 뉴스 검색 키워드

@@ -1,7 +1,9 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
+
+import requests
 
 from collectors.civil_service import (
     collect_all_civil_service,
@@ -1115,6 +1117,281 @@ class ArticleStoreTests(unittest.TestCase):
                 with self.assertRaises(NoFreshArticlesError):
                     from collectors import civil_service
                     civil_service.collect_all_civil_service()
+
+
+class ITNewsCollectorTests(unittest.TestCase):
+    """TDD tests for IT news collection behaviour (RSS + HackerNews)."""
+
+    # ── 1. Config: at least 6 RSS feeds configured ───────────────────────────
+
+    def test_it_news_feeds_has_at_least_six_entries(self):
+        """Config.IT_NEWS_FEEDS must have ≥ 6 feeds so the collector has diverse sources."""
+        from config import Config
+        self.assertGreaterEqual(
+            len(Config.IT_NEWS_FEEDS),
+            6,
+            f"Expected ≥6 feeds, got {len(Config.IT_NEWS_FEEDS)}: {[f['name'] for f in Config.IT_NEWS_FEEDS]}",
+        )
+
+    # ── 2. RSS: inspects up to 8 entries per feed ────────────────────────────
+
+    @patch("collectors.it_news.requests.get")
+    @patch("collectors.it_news.feedparser.parse")
+    def test_rss_inspects_up_to_eight_entries_per_feed(self, mock_parse, mock_get):
+        """collect_rss_feeds must slice feed.entries[:8], not [:5]."""
+        import feedparser
+        from collectors.it_news import collect_rss_feeds
+
+        def _make_entry(n):
+            m = MagicMock()
+            m.get.side_effect = lambda key, default="": {
+                "title": f"Article {n}",
+                "link": f"https://example.com/{n}",
+                "summary": "summary",
+                "published": "Mon, 21 Sep 2026 05:00:00 GMT",
+            }.get(key, default)
+            return m
+
+        # Feed with 10 valid entries; collector must attempt at least 8 of them
+        mock_feed = MagicMock()
+        mock_feed.entries = [_make_entry(i) for i in range(10)]
+        mock_parse.return_value = mock_feed
+        mock_get.return_value.content = b"rss"
+
+        # Patch Config to a single feed so we only count one feed's entries
+        with patch("collectors.it_news.Config") as mock_cfg:
+            mock_cfg.IT_NEWS_FEEDS = [{"name": "TestFeed", "url": "https://test.invalid/rss"}]
+            articles = collect_rss_feeds()
+
+        # With 10 valid entries and a slice of ≤8, we expect 8 articles (all have dates)
+        self.assertGreaterEqual(
+            len(articles),
+            8,
+            "collect_rss_feeds must inspect at least 8 entries per feed (currently slices at 5)",
+        )
+
+    # ── 3. HackerNews: inspects 20 story IDs ────────────────────────────────
+
+    @patch("collectors.it_news.requests.get")
+    def test_hackernews_inspects_twenty_story_ids(self, mock_get):
+        """collect_hackernews must request 20 story IDs, not 10."""
+        from collectors.it_news import collect_hackernews
+
+        # Return 30 IDs; collector should request 20 individual items
+        all_ids = list(range(1, 31))
+        ids_response = MagicMock()
+        ids_response.json.return_value = all_ids
+
+        def _item_response(sid):
+            r = MagicMock()
+            r.json.return_value = {
+                "id": sid,
+                "title": f"Story {sid}",
+                "url": f"https://hn-example.com/{sid}",
+                "score": 10,
+                "descendants": 5,
+                "time": 1758488400,
+            }
+            return r
+
+        mock_get.side_effect = [ids_response] + [_item_response(i) for i in range(1, 31)]
+
+        articles = collect_hackernews()
+
+        # Number of individual item calls = total get calls - 1 (the topstories call)
+        individual_calls = mock_get.call_count - 1
+        self.assertGreaterEqual(
+            individual_calls,
+            20,
+            f"collect_hackernews must fetch 20 story items; only fetched {individual_calls}",
+        )
+        self.assertGreaterEqual(len(articles), 15)  # most should succeed
+
+    # ── 4. Aggregate: ≤20 total, ≤5 per source, dynamic header ──────────────
+
+    @patch("collectors.it_news.ArticleStore")
+    @patch("collectors.it_news._get_now")
+    @patch("collectors.it_news.collect_hackernews")
+    @patch("collectors.it_news.collect_rss_feeds")
+    def test_aggregate_caps_total_at_20_and_per_source_at_5(
+        self, mock_rss, mock_hn, mock_now, mock_store_cls
+    ):
+        """collect_all_it_news must cap output: ≤20 total candidates, ≤5 per source.
+        The header must reflect the actual candidate count dynamically."""
+        from datetime import datetime, timezone, timedelta
+        from collectors.it_news import collect_all_it_news
+
+        now = datetime(2026, 9, 21, 7, 0, tzinfo=timezone.utc)
+        mock_now.return_value = now
+
+        def _article(source, n, age_h=1):
+            return {
+                "source": source,
+                "title": f"{source} Article {n}",
+                "link": f"https://{source.lower()}.example.com/{n}",
+                "summary": "summary",
+                "published_at": now - timedelta(hours=age_h),
+            }
+
+        # 10 RSS articles from "FeedA", 10 from "FeedB", 15 HN articles → 35 total candidates
+        mock_rss.return_value = (
+            [_article("FeedA", i) for i in range(10)]
+            + [_article("FeedB", i) for i in range(10)]
+        )
+        mock_hn.return_value = [_article("HackerNews", i) for i in range(15)]
+
+        # Patch ArticleStore so no disk I/O; filter_fresh passes everything through
+        store_instance = MagicMock()
+        store_instance.has_seen.return_value = False
+        mock_store_cls.return_value = store_instance
+
+        with patch("collectors.it_news.filter_fresh") as mock_filter:
+            # filter_fresh returns all articles unchanged (all fresh)
+            all_in = mock_rss.return_value + mock_hn.return_value
+            mock_filter.return_value = all_in
+
+            result = collect_all_it_news()
+
+        # Count how many articles appear in output (each has a numbered line "N. **Title**")
+        import re
+        article_lines = re.findall(r"^\d+\. \*\*", result, re.MULTILINE)
+        total_in_output = len(article_lines)
+
+        self.assertLessEqual(
+            total_in_output,
+            20,
+            f"Output must contain ≤20 articles; found {total_in_output}",
+        )
+
+        # Per-source cap: count "FeedA" and "HackerNews" occurrences
+        feeda_count = result.count("(FeedA)")
+        feedb_count = result.count("(FeedB)")
+        hn_count = result.count("(HackerNews)")
+        self.assertLessEqual(feeda_count, 5, f"FeedA: {feeda_count} > 5")
+        self.assertLessEqual(feedb_count, 5, f"FeedB: {feedb_count} > 5")
+        self.assertLessEqual(hn_count, 5, f"HackerNews: {hn_count} > 5")
+
+        # Dynamic header: the displayed number must match total_in_output
+        self.assertIn(f"총 {total_in_output}건", result,
+                      "Header must dynamically reflect the actual displayed article count")
+
+    # ── 5. Resilience: malformed/failed feeds don't block others ─────────────
+
+    @patch("collectors.it_news.requests.get")
+    @patch("collectors.it_news.feedparser.parse")
+    def test_malformed_feed_does_not_prevent_other_feeds(self, mock_parse, mock_get):
+        """If one feed raises an exception, the others must still be collected."""
+        from collectors.it_news import collect_rss_feeds
+
+        good_entry = MagicMock()
+        good_entry.get.side_effect = lambda key, default="": {
+            "title": "Good Article",
+            "link": "https://good.example.com/1",
+            "summary": "summary",
+            "published": "Mon, 21 Sep 2026 05:00:00 GMT",
+        }.get(key, default)
+
+        good_feed = MagicMock()
+        good_feed.entries = [good_entry]
+
+        # First feed raises, second feed returns one good article
+        good_response = MagicMock(content=b"rss")
+        mock_get.side_effect = [requests.RequestException("Network error"), good_response]
+        mock_parse.return_value = good_feed
+
+        with patch("collectors.it_news.Config") as mock_cfg:
+            mock_cfg.IT_NEWS_FEEDS = [
+                {"name": "BadFeed", "url": "https://bad.invalid/rss"},
+                {"name": "GoodFeed", "url": "https://good.example.com/rss"},
+            ]
+            articles = collect_rss_feeds()
+
+        self.assertEqual(1, len(articles), "Good feed article must be collected despite bad feed failure")
+        self.assertEqual("Good Article", articles[0]["title"])
+        self.assertEqual("GoodFeed", articles[0]["source"])
+
+    @patch("collectors.it_news.requests.get")
+    @patch("collectors.it_news.feedparser.parse")
+    def test_rss_accepts_iso_updated_timestamp(self, mock_parse, mock_get):
+        entry = {
+            "title": "ISO dated article",
+            "link": "https://example.com/iso",
+            "summary": "summary",
+            "updated": "2026-09-22T06:30:00Z",
+        }
+        mock_parse.return_value = SimpleNamespace(entries=[entry])
+        mock_get.return_value.content = b"rss"
+
+        with patch.object(
+            __import__("collectors.it_news", fromlist=["Config"]).Config,
+            "IT_NEWS_FEEDS",
+            [{"name": "ISO Feed", "url": "https://example.com/feed"}],
+        ):
+            articles = __import__(
+                "collectors.it_news", fromlist=["collect_rss_feeds"]
+            ).collect_rss_feeds()
+
+        self.assertEqual(1, len(articles))
+        self.assertEqual(
+            datetime(2026, 9, 22, 6, 30, tzinfo=timezone.utc),
+            articles[0]["published_at"],
+        )
+
+    @patch("collectors.it_news.requests.get")
+    @patch("collectors.it_news.feedparser.parse")
+    def test_rss_fetch_uses_timeout_and_user_agent(self, mock_parse, mock_get):
+        response = MagicMock(content=b"rss")
+        mock_get.return_value = response
+        mock_parse.return_value = SimpleNamespace(entries=[])
+
+        with patch.object(
+            __import__("collectors.it_news", fromlist=["Config"]).Config,
+            "IT_NEWS_FEEDS",
+            [{"name": "Timed Feed", "url": "https://example.com/feed"}],
+        ):
+            __import__(
+                "collectors.it_news", fromlist=["collect_rss_feeds"]
+            ).collect_rss_feeds()
+
+        mock_get.assert_called_once_with(
+            "https://example.com/feed",
+            headers=unittest.mock.ANY,
+            timeout=10,
+        )
+        response.raise_for_status.assert_called_once_with()
+        mock_parse.assert_called_once_with(b"rss")
+
+    @patch("collectors.it_news.ArticleStore")
+    @patch("collectors.it_news._get_now")
+    @patch("collectors.it_news.collect_hackernews", return_value=[])
+    @patch("collectors.it_news.collect_rss_feeds")
+    def test_aggregate_enforces_rolling_24_hour_window(
+        self, mock_rss, _mock_hn, mock_now, mock_store_cls
+    ):
+        now = datetime(2026, 9, 23, 7, 0, tzinfo=timezone.utc)
+        mock_now.return_value = now
+        mock_store_cls.return_value.has_seen.return_value = False
+        mock_rss.return_value = [
+            {
+                "source": "Feed",
+                "title": "Fresh article",
+                "link": "https://example.com/fresh",
+                "summary": "fresh",
+                "published_at": now - timedelta(hours=23),
+            },
+            {
+                "source": "Feed",
+                "title": "Stale article",
+                "link": "https://example.com/stale",
+                "summary": "stale",
+                "published_at": now - timedelta(hours=25),
+            },
+        ]
+
+        result = collect_all_it_news()
+
+        self.assertIn("Fresh article", result)
+        self.assertNotIn("Stale article", result)
 
 
 if __name__ == "__main__":

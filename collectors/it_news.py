@@ -1,4 +1,5 @@
 """IT 뉴스 수집기 - RSS + Hacker News API"""
+import calendar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -17,16 +18,30 @@ def _get_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _parse_published_at(value: str) -> datetime | None:
+def _parse_published_at(entry: dict) -> datetime | None:
+    parsed_time = entry.get("published_parsed") or entry.get("updated_parsed")
+    if parsed_time:
+        return datetime.fromtimestamp(calendar.timegm(parsed_time), tz=timezone.utc)
+
+    value = entry.get("published") or entry.get("pubDate") or entry.get("updated") or ""
     if not value:
         return None
     try:
         parsed = parsedate_to_datetime(value)
     except (TypeError, ValueError):
+        parsed = None
+    if parsed is not None:
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
         return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def collect_rss_feeds() -> list:
@@ -35,17 +50,21 @@ def collect_rss_feeds() -> list:
 
     for feed_info in Config.IT_NEWS_FEEDS:
         try:
-            feed = feedparser.parse(feed_info["url"])
+            response = requests.get(
+                feed_info["url"],
+                headers=Config.HEADERS,
+                timeout=10,
+            )
+            response.raise_for_status()
+            feed = feedparser.parse(response.content)
             collected_count = 0
-            for entry in feed.entries[:5]:
+            for entry in feed.entries[:8]:
                 # HTML 태그 제거
                 summary_raw = entry.get("summary", "")
                 from bs4 import BeautifulSoup
                 summary_clean = BeautifulSoup(summary_raw, "html.parser").get_text(strip=True)
                 
-                published_at = _parse_published_at(
-                    entry.get("published", entry.get("pubDate", ""))
-                )
+                published_at = _parse_published_at(entry)
                 title = entry.get("title", "").strip()
                 link = entry.get("link", "")
                 if not title or not link or published_at is None:
@@ -60,7 +79,7 @@ def collect_rss_feeds() -> list:
                 })
                 collected_count += 1
             logger.info(f"[RSS] {feed_info['name']}: {collected_count}건 수집")
-        except Exception as e:
+        except Exception as e:  # noqa: BROAD_EXCEPT_OK - isolate third-party feed failures
             logger.warning(f"[RSS] {feed_info['name']} 실패: {e}")
 
     return articles
@@ -74,7 +93,7 @@ def collect_hackernews() -> list:
             "https://hacker-news.firebaseio.com/v0/topstories.json",
             timeout=10,
         )
-        story_ids = resp.json()[:10]
+        story_ids = resp.json()[:20]
 
         for sid in story_ids:
             try:
@@ -92,11 +111,11 @@ def collect_hackernews() -> list:
                             item["time"], tz=timezone.utc
                         ),
                     })
-            except Exception:
+            except Exception:  # noqa: BROAD_EXCEPT_OK - one bad HN item must not abort the batch
                 continue
 
         logger.info(f"[HackerNews] {len(articles)}건 수집")
-    except Exception as e:
+    except Exception as e:  # noqa: BROAD_EXCEPT_OK - external API boundary
         logger.error(f"[HackerNews] 수집 실패: {e}")
 
     return articles
@@ -113,21 +132,45 @@ def collect_all_it_news() -> str:
         raise NoFreshArticlesError("새로운 IT 뉴스가 없습니다.")
 
     dated_articles = [article for article in all_articles if "published_at" in article]
-    if dated_articles:
-        now = _get_now()
-        store = ArticleStore(ARTICLE_STORE_PATH)
-        store.prune(now=now)
-        all_articles = filter_fresh(dated_articles, store, "it_news", now=now)
-        if not all_articles:
-            raise NoFreshArticlesError("새로운 IT 뉴스가 없습니다.")
-        for article in all_articles:
-            store.mark_seen("it_news", article["link"], now)
-        store.save()
+    undated_articles = [article for article in all_articles if "published_at" not in article]
 
-    # 요약 실패 시를 대비해 전체 기사 중 상위 10개만 텍스트로 만듦 (링크 위주)
-    display_articles = all_articles[:10]
-    
-    text = f"[IT 뉴스 수집 결과 - 총 {len(all_articles)}건 중 상위 10개]\n\n"
+    now = _get_now()
+    store = ArticleStore(ARTICLE_STORE_PATH)
+    store.prune(now=now)
+
+    fresh_articles = filter_fresh(
+        dated_articles,
+        store,
+        "it_news",
+        now=now,
+        max_age_hours=24,
+    )
+    fresh_articles.extend(undated_articles)
+
+    if not fresh_articles:
+        raise NoFreshArticlesError("새로운 IT 뉴스가 없습니다.")
+
+    fresh_articles.sort(
+        key=lambda article: article.get("published_at")
+        or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+
+    source_counts: dict[str, int] = {}
+    display_articles: list[dict] = []
+    for article in fresh_articles:
+        source = article["source"]
+        if source_counts.get(source, 0) < 5:
+            display_articles.append(article)
+            source_counts[source] = source_counts.get(source, 0) + 1
+        if len(display_articles) >= 20:
+            break
+
+    for article in display_articles:
+        store.mark_seen("it_news", article["link"], now)
+    store.save()
+
+    text = f"[IT 뉴스 수집 결과 - 총 {len(display_articles)}건]\n\n"
     for i, art in enumerate(display_articles, 1):
         text += (
             f"{i}. **{art['title']}** ({art['source']})\n"
