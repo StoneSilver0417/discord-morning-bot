@@ -6,6 +6,7 @@ from collectors.civil_service import (
     _articles_are_duplicates,
     _is_relevant,
     collect_all_civil_service,
+    search_civil_service_news,
 )
 
 
@@ -81,6 +82,53 @@ def test_relevance_filter_rejects_misleading_public_official_term() -> None:
     }
 
     assert not _is_relevant(article)
+
+
+def test_relevance_filter_rejects_foreign_civil_service_news() -> None:
+    foreign_articles = [
+        {
+            "title": "베트남 공무원 임금 개혁 추진",
+            "summary": "베트남 정부가 공무원 급여 체계를 개편한다",
+        },
+        {
+            "title": "미 연방 공무원 감축 계획 발표",
+            "summary": "미국 정부의 공공부문 인력 정책",
+        },
+        {
+            "title": "오스트리아와 스위스의 공무원연금 개혁",
+            "summary": "유럽 각국의 연금 제도를 비교한다",
+        },
+        {
+            "title": "유엔, 태평양 도서국 공무원 초청 연수",
+            "summary": "국제기구가 해외 공무원을 대상으로 연수를 열었다",
+        },
+    ]
+
+    results = [_is_relevant(article) for article in foreign_articles]
+
+    assert results == [False, False, False, False]
+
+
+@patch("collectors.civil_service.feedparser.parse")
+def test_search_query_limits_results_to_korean_public_administration(
+    mock_parse: MagicMock,
+) -> None:
+    mock_parse.return_value.bozo = False
+    mock_parse.return_value.entries = [
+        {
+            "title": "베트남 공무원 임금 개혁 추진",
+            "summary": "베트남 정부가 공무원 급여 체계를 개편한다",
+            "link": "https://example.com/vietnam",
+            "published": "Wed, 02 Sep 2026 09:00:00 GMT",
+        }
+    ]
+
+    articles = search_civil_service_news("공무원 정책")
+
+    query_url = mock_parse.call_args.args[0]
+    assert "%EB%8C%80%ED%95%9C%EB%AF%BC%EA%B5%AD" in query_url
+    assert "-%EB%B2%A0%ED%8A%B8%EB%82%A8" in query_url
+    assert articles == []
 
 
 @patch("collectors.civil_service.ArticleStore")

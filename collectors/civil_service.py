@@ -7,6 +7,7 @@ import urllib.parse
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from typing import Final
 
 import feedparser
 from config import Config
@@ -54,6 +55,22 @@ _CIVIL_SERVICE_TERMS = (
     "지방직",
 )
 
+_DOMESTIC_SEARCH_SCOPE: Final = "(대한민국 OR 한국 OR 중앙정부 OR 지방자치단체 OR 공공기관)"
+_SEARCH_EXCLUSION_TERMS: Final = ("베트남", "해외", "외국", "국제", "유엔")
+_FOREIGN_EXCLUSION_TERMS: Final = (
+    "베트남", "미국", "미 연방", "일본", "중국", "러시아", "북한", "대만",
+    "태국", "필리핀", "인도네시아", "말레이시아", "싱가포르", "인도",
+    "호주", "뉴질랜드", "캐나다", "영국", "프랑스", "독일", "이탈리아",
+    "스페인", "브라질", "멕시코", "우크라이나", "이란", "이라크",
+    "사우디", "아랍에미리트", "오스트리아", "스위스", "네덜란드",
+    "벨기에", "스웨덴", "노르웨이", "핀란드", "덴마크", "폴란드",
+    "체코", "헝가리", "그리스", "포르투갈", "튀르키예", "터키",
+    "몽골", "캄보디아", "라오스", "미얀마", "방글라데시", "파키스탄",
+    "네팔", "스리랑카", "이스라엘", "이집트", "남아공", "유엔",
+    "유럽연합", "EU", "유럽", "아프리카", "중동", "중남미", "태평양",
+    "국제기구", "해외 공무원", "외국 공무원",
+)
+
 
 def _normalize_for_similarity(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", _clean_text(text)).casefold()
@@ -87,7 +104,9 @@ def _is_relevant(article: dict) -> bool:
         "NFKC",
         f'{article.get("title", "")} {article.get("summary", "")}',
     )
-    return any(term in text for term in _CIVIL_SERVICE_TERMS)
+    has_civil_service_term = any(term in text for term in _CIVIL_SERVICE_TERMS)
+    has_foreign_term = any(term in text for term in _FOREIGN_EXCLUSION_TERMS)
+    return has_civil_service_term and not has_foreign_term
 
 
 def _articles_are_duplicates(left: dict, right: dict) -> bool:
@@ -141,7 +160,9 @@ def _deduplicate_articles(articles: list[dict]) -> list[dict]:
 def search_civil_service_news(keyword: str, count: int = 10) -> list[dict]:
     """Google News RSS로 키워드 관련 공무원 뉴스를 수집합니다."""
     articles: list[dict] = []
-    encoded_keyword = urllib.parse.quote(keyword)
+    exclusions = " ".join(f"-{term}" for term in _SEARCH_EXCLUSION_TERMS)
+    query = f"{keyword} {_DOMESTIC_SEARCH_SCOPE} {exclusions}"
+    encoded_keyword = urllib.parse.quote(query)
     url = f"https://news.google.com/rss/search?q={encoded_keyword}&hl=ko&gl=KR&ceid=KR:ko"
 
     try:
@@ -162,14 +183,17 @@ def search_civil_service_news(keyword: str, count: int = 10) -> list[dict]:
             if not title or not link or published_at is None:
                 continue
 
-            articles.append({
+            article = {
                 "title": title,
                 "link": link,
                 "summary": summary,
                 "pubDate": pub_date,
                 "keyword": keyword,
                 "published_at": published_at,
-            })
+            }
+            if not _is_relevant(article):
+                continue
+            articles.append(article)
 
         logger.info(f"[공무원뉴스] '{keyword}' {len(articles)}건 수집")
 
