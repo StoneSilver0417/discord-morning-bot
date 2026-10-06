@@ -1411,6 +1411,41 @@ class ITNewsCollectorTests(unittest.TestCase):
         self.assertIn("Fresh article", result)
         self.assertNotIn("Stale article", result)
 
+    def test_workflow_schedule_is_kst_0700_utc_2200(self):
+        from pathlib import Path
+        workflow_path = Path(".github") / "workflows" / "morning_briefing.yml"
+        self.assertTrue(workflow_path.exists())
+        content = workflow_path.read_text(encoding="utf-8")
+        self.assertIn("0 22 * * *", content)
+        self.assertIn("UTC 22:00 = KST 07:00", content)
+
+    def test_it_news_system_prompt_specifies_korean_translation(self):
+        from processors.gemini_processor import SYSTEM_PROMPTS
+        prompt = SYSTEM_PROMPTS["it_news"]
+        self.assertIn("한국어로 번역", prompt)
+        self.assertIn("한국어 기사 제목", prompt)
+
+    @patch("collectors.it_news.requests.get")
+    def test_hackernews_summary_is_in_korean(self, mock_get):
+        from collectors.it_news import collect_hackernews
+        resp_ids = MagicMock()
+        resp_ids.json.return_value = [100]
+        resp_item = MagicMock()
+        resp_item.json.return_value = {
+            "id": 100,
+            "title": "HN Korean Summary Test",
+            "url": "https://example.com/hn",
+            "score": 42,
+            "descendants": 7,
+            "time": 1758488400,
+        }
+        mock_get.side_effect = [resp_ids, resp_item]
+
+        articles = collect_hackernews()
+        self.assertEqual(1, len(articles))
+        self.assertIn("추천 42개", articles[0]["summary"])
+        self.assertIn("댓글 7개", articles[0]["summary"])
+
 
 if __name__ == "__main__":
     unittest.main()

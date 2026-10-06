@@ -166,3 +166,33 @@ def test_validator_rejects_malformed_link_or_ranking_order() -> None:
     assert not is_valid_news_selection(preamble, contract)
     assert not is_valid_news_selection(trailing_summary, contract)
     assert not is_valid_news_selection(reversed_priority, contract)
+
+
+def test_validator_accepts_korean_translated_title_for_english_candidates() -> None:
+    # Given
+    english_raw = (
+        "[IT 뉴스 수집 결과 - 총 2건]\n\n"
+        "1. **Apple announces new M4 MacBook Pro lineup** (TechCrunch)\n"
+        "설명: Apple has revealed its latest MacBook Pro models powered by M4 chips.\n"
+        "🔗 https://example.com/apple-m4\n\n"
+        "2. **OpenAI launches search features for ChatGPT** (Wired)\n"
+        "설명: OpenAI brings real-time web search capabilities directly to ChatGPT.\n"
+        "🔗 https://example.com/openai-search"
+    )
+    contract = build_news_contract(english_raw)
+    translated_ranked = (
+        "1. [상] [하드웨어] 애플, M4 칩 탑재 신형 맥북 프로 라인업 발표 (TechCrunch)\n"
+        "• 내용 요약: 애플이 차세대 M4 칩을 탑재한 맥북 프로 모델을 공개했습니다.\n"
+        "• 실무/영향: 개발 및 인프라 업무 환경의 하드웨어 성능 개선이 기대됩니다.\n"
+        "🔗 https://example.com/apple-m4\n\n"
+        "2. [중] [AI] 오픈AI, 챗GPT 실시간 웹 검색 기능 공식 출시 (Wired)\n"
+        "• 내용 요약: 오픈AI가 챗GPT 내에서 실시간 웹 검색을 지원하는 기능을 출시했습니다.\n"
+        "• 실무/영향: 정보 검색 및 업무 리서치 효율성이 향상될 것으로 보입니다.\n"
+        "🔗 https://example.com/openai-search"
+    )
+
+    # When
+    is_valid = is_valid_news_selection(translated_ranked, contract)
+
+    # Then
+    assert is_valid

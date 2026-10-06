@@ -106,7 +106,7 @@ def collect_hackernews() -> list:
                         "source": "HackerNews",
                         "title": item["title"],
                         "link": item.get("url", f"https://news.ycombinator.com/item?id={sid}"),
-                        "summary": f"Points: {item.get('score', 0)}, Comments: {item.get('descendants', 0)}",
+                        "summary": f"추천 {item.get('score', 0)}개, 댓글 {item.get('descendants', 0)}개",
                         "published_at": datetime.fromtimestamp(
                             item["time"], tz=timezone.utc
                         ),

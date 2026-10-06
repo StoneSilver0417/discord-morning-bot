@@ -55,6 +55,22 @@ def _candidate_title(title_line: str) -> str:
     return _normalize_title(bold_title.group(1) if bold_title else title_line)
 
 
+def _has_hangul(text: str) -> bool:
+    return bool(re.search(r"[\uac00-\ud7a3]", text))
+
+
+def _has_latin(text: str) -> bool:
+    return bool(re.search(r"[a-zA-Z]", text))
+
+
+def _is_valid_candidate_title(title: str, candidate_title: str) -> bool:
+    if title == candidate_title or title.startswith(f"{candidate_title} ("):
+        return True
+    if (_has_latin(candidate_title) or not _has_hangul(candidate_title)) and _has_hangul(title):
+        return True
+    return False
+
+
 def _parse_candidates(raw_data: str) -> tuple[NewsCandidate, ...]:
     candidates: list[NewsCandidate] = []
     seen_titles: set[str] = set()
@@ -161,7 +177,7 @@ def is_valid_news_selection(
         candidate = next(
             item for item in contract.candidates if item.canonical_url == canonical_url
         )
-        if title != candidate.title and not title.startswith(f"{candidate.title} ("):
+        if not _is_valid_candidate_title(title, candidate.title):
             return False
         seen_titles.add(title)
         seen_urls.add(canonical_url)
