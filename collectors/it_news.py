@@ -9,6 +9,7 @@ import feedparser
 from config import Config
 from utils.article_store import ArticleStore, NoFreshArticlesError, filter_fresh
 from utils.logger import setup_logger
+from utils.translator import translate_article_summary, translate_article_title
 
 logger = setup_logger("it_news")
 ARTICLE_STORE_PATH = str(Path("data") / "article_store.json")
@@ -172,9 +173,11 @@ def collect_all_it_news() -> str:
 
     text = f"[IT 뉴스 수집 결과 - 총 {len(display_articles)}건]\n\n"
     for i, art in enumerate(display_articles, 1):
+        translated_title = translate_article_title(art["title"])
+        translated_summary = translate_article_summary(art.get("summary") or "")
         text += (
-            f"{i}. **{art['title']}** ({art['source']})\n"
-            f"설명: {art.get('summary') or '기사 설명 없음'}\n"
+            f"{i}. **{translated_title}** ({art['source']})\n"
+            f"설명: {translated_summary}\n"
             f"🔗 {art['link']}\n\n"
         )
     

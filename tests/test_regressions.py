@@ -1392,32 +1392,34 @@ class ITNewsCollectorTests(unittest.TestCase):
         mock_rss.return_value = [
             {
                 "source": "Feed",
-                "title": "Fresh article",
+                "title": "신규 IT 기사",
                 "link": "https://example.com/fresh",
-                "summary": "fresh",
+                "summary": "신규 기사 요약",
                 "published_at": now - timedelta(hours=23),
             },
             {
                 "source": "Feed",
-                "title": "Stale article",
+                "title": "오래된 IT 기사",
                 "link": "https://example.com/stale",
-                "summary": "stale",
+                "summary": "오래된 기사 요약",
                 "published_at": now - timedelta(hours=25),
             },
         ]
 
         result = collect_all_it_news()
 
-        self.assertIn("Fresh article", result)
-        self.assertNotIn("Stale article", result)
+        self.assertIn("신규 IT 기사", result)
+        self.assertNotIn("오래된 IT 기사", result)
+        self.assertIn("https://example.com/fresh", result)
+        self.assertNotIn("https://example.com/stale", result)
 
     def test_workflow_schedule_is_kst_0700_utc_2200(self):
         from pathlib import Path
         workflow_path = Path(".github") / "workflows" / "morning_briefing.yml"
         self.assertTrue(workflow_path.exists())
         content = workflow_path.read_text(encoding="utf-8")
-        self.assertIn("0 22 * * *", content)
-        self.assertIn("UTC 22:00 = KST 07:00", content)
+        self.assertIn("50 21 * * *", content)
+        self.assertIn("UTC 21:50", content)
 
     def test_it_news_system_prompt_specifies_korean_translation(self):
         from processors.gemini_processor import SYSTEM_PROMPTS

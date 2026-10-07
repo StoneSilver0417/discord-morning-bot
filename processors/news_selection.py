@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from utils.translator import localize_news_body
+
 NEWS_LIMIT: Final = 10
 _BLOCK_PATTERN: Final = re.compile(
     r"(?ms)^\s*(\d+)[.)]\s+(.*?)(?=^\s*\d+[.)]\s+|\Z)"
@@ -108,7 +110,8 @@ def build_news_contract(raw_data: str) -> NewsSelectionContract:
     selected = candidates[:NEWS_LIMIT]
     if selected:
         rendered = "\n\n".join(
-            f"{index}. {candidate.body}" for index, candidate in enumerate(selected, 1)
+            f"{index}. {localize_news_body(candidate.body)}"
+            for index, candidate in enumerate(selected, 1)
         )
         fallback_text = f"[뉴스 선별 결과 - 총 {len(selected)}건]\n\n{rendered}"
     else:

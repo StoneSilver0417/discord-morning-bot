@@ -2,8 +2,8 @@ name: Morning Briefing
 
 on:
   schedule:
-    # UTC 22:00 = KST 07:00 (다음날)
-    - cron: '0 22 * * *'
+    # UTC 21:50 = KST 06:50 (정시 :00 트래픽 정체 및 GitHub Actions 크론 지연 방지를 위해 오프피크 21:50 UTC로 설정 -> KST 07:00 전송 준비 완료)
+    - cron: '50 21 * * *'
   workflow_dispatch: # 수동 트리거 (테스트용)
 
 jobs:
